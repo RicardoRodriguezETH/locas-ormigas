@@ -168,3 +168,22 @@ body {
   border-radius: 8px;
   max-width: 100%;
 }
+
+.stats-chart-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.stats-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-chart-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

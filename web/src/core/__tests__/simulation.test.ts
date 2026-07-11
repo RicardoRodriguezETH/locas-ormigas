@@ -245,4 +245,17 @@ describe('Simulation', () => {
     expect(ant.headingToSurface).toBe(false);
     expect(ant.exitPath).toHaveLength(0);
   });
+
+  it('records a bounded rolling history for the stats overlay, sampled roughly every 30 frames', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.init(5);
+
+    for (let i = 0; i < 95; i++) sim.update(); // spans several 30-frame sample intervals
+    expect(sim.history.length).toBeGreaterThanOrEqual(3);
+    expect(sim.history[0].population).toBe(5);
+    expect(sim.history.every((s, i) => i === 0 || s.frame > sim.history[i - 1].frame)).toBe(true);
+
+    for (let i = 0; i < 30 * 500; i++) sim.update();
+    expect(sim.history.length).toBeLessThanOrEqual(400);
+  });
 });

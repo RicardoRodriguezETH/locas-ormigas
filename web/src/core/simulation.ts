@@ -40,6 +40,21 @@ const WALLS: ReadonlyArray<{ x: number; gapAtTop: boolean }> = [
   { x: 14, gapAtTop: true },
 ];
 
+/** One point in `Simulation.history` — a cheap scalar snapshot for the stats overlay's trend
+ * charts, sampled every `HISTORY_SAMPLE_INTERVAL_FRAMES` frames regardless of whether that
+ * overlay is currently visible, so opening it later still shows the colony's real history
+ * rather than starting from a blank chart. */
+export interface HistorySample {
+  frame: number;
+  population: number;
+  foodStored: number;
+  foragingThrottle: number;
+  dugCount: number;
+}
+const HISTORY_SAMPLE_INTERVAL_FRAMES = 30;
+/** Caps memory/redraw cost — old samples fall off the front as new ones are appended. */
+const HISTORY_MAX_SAMPLES = 400;
+
 /** Owns the ant colony and drives the pheromone-following behavior each frame: move, react to
  * the tile underfoot, then read/write trail info in the surrounding grid cells. */
 export class Simulation {
@@ -79,6 +94,9 @@ export class Simulation {
    * one-frame lag as `foragingThrottle`, negligible at 60fps). */
   caveFoodSignal = 0;
 
+  /** Rolling history for the stats overlay's trend charts — see `HistorySample`. */
+  history: HistorySample[] = [];
+
   constructor(config: SimConfig = defaultConfig, options: SimulationOptions = {}) {
     this.config = config;
     this.grid = new WorldGrid(config, { randomize: options.randomizeGrid ?? true });
@@ -101,6 +119,7 @@ export class Simulation {
     this.queen = createQueen(this.queenChamberPosition);
     this.brood = [];
     this.foodStored = 0;
+    this.history = [];
 
     this.ants = [];
     this.undergroundAntCount = 0;
@@ -196,7 +215,20 @@ export class Simulation {
     const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
     this.undergroundGrid.ensureDesignatedFrontier(this.config.antUndergroundDesignationPoolSize, targetVolume);
     this.updateQueenAndBrood();
+    if (this.frame % HISTORY_SAMPLE_INTERVAL_FRAMES === 0) this.recordHistorySample();
     this.frame += 1;
+  }
+
+  /** Appends one `HistorySample`, dropping the oldest once over `HISTORY_MAX_SAMPLES`. */
+  private recordHistorySample(): void {
+    this.history.push({
+      frame: this.frame,
+      population: this.ants.length,
+      foodStored: this.foodStored,
+      foragingThrottle: this.foragingThrottle,
+      dugCount: this.undergroundGrid.dugCount(),
+    });
+    if (this.history.length > HISTORY_MAX_SAMPLES) this.history.shift();
   }
 
   /** Natural-death "safety net" respawn (see `respawnAsCallow`) — stays exactly where the ant
