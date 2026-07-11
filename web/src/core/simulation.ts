@@ -50,6 +50,7 @@ export class Simulation {
   frame = 0;
   cavePosition: Vector2 = { x: 0, y: 0 };
   queenChamberPosition: Vector2 = { x: 0, y: 0 };
+  nurseryChamberPosition: Vector2 = { x: 0, y: 0 };
   queen: Queen = createQueen(this.queenChamberPosition);
   brood: Brood[] = [];
   /** Colony-wide stored food, fed by underground-delivered cargo and spent on egg-laying and
@@ -88,9 +89,11 @@ export class Simulation {
     this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
     this.buildZigzagStressTestMap();
     // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
-    const { queenChamberXg, queenChamberYg } = this.undergroundGrid.seedStarterNest(caveGx, caveGy);
+    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg } =
+      this.undergroundGrid.seedStarterNest(caveGx, caveGy);
     const half = this.config.mapGridSize / 2;
     this.queenChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(queenChamberXg, queenChamberYg), { x: half, y: half });
+    this.nurseryChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(nurseryChamberXg, nurseryChamberYg), { x: half, y: half });
     this.queen = createQueen(this.queenChamberPosition);
     this.brood = [];
     this.foodStored = 0;
@@ -198,24 +201,33 @@ export class Simulation {
     respawnAsCallow(ant, this.config, position, direction);
   }
 
-  /** Underground behavior. Three modes, checked in order:
+  /** Underground behavior. Four modes, checked in order:
    * 1. Carrying a delivery (`deliveringUnderground`): steer straight for the queen chamber
    *    and deposit on arrival — see `beginUndergroundDelivery`.
-   * 2. Duty shift over (`frame >= undergroundDutyUntil`, and not mid-delivery): resurface.
-   * 3. Otherwise, debugging-phase filler behavior: wander the dug tunnel network, digging out
-   *    the colony's current designated site(s) if bumped into (see
-   *    `UndergroundGrid.ensureDesignatedFrontier`) — no pheromones, no rest cycle. Ants bumping
-   *    into a plain, non-designated wall just turn away; they can't opportunistically eat
-   *    through arbitrary dirt, only ever the colony's current designated growth site(s). */
+   * 2. Carrying brood (`carriedBrood`): steer for the nursery chamber and settle it there on
+   *    arrival — see `tryPickUpBrood`/`stepBroodCarry`. Finishing a carry takes priority over
+   *    resurfacing, same as a food delivery does.
+   * 3. Duty shift over (`frame >= undergroundDutyUntil`, and not mid-delivery/carry): resurface.
+   * 4. Otherwise, debugging-phase filler behavior: wander the dug tunnel network, opportunistically
+   *    picking up any loose brood passed along the way, and digging out the colony's current
+   *    designated site(s) if bumped into (see `UndergroundGrid.ensureDesignatedFrontier`) — no
+   *    pheromones, no rest cycle. Ants bumping into a plain, non-designated wall just turn away;
+   *    they can't opportunistically eat through arbitrary dirt, only ever the colony's current
+   *    designated growth site(s). */
   private stepUndergroundAnt(ant: Ant): void {
     if (ant.deliveringUnderground) {
       this.stepUndergroundDelivery(ant);
+      return;
+    }
+    if (ant.carriedBrood) {
+      this.stepBroodCarry(ant);
       return;
     }
     if (this.frame >= ant.undergroundDutyUntil) {
       this.ascendToSurface(ant);
       return;
     }
+    if (this.tryPickUpBrood(ant)) return; // starts carrying next frame
 
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
@@ -246,27 +258,17 @@ export class Simulation {
     }
   }
 
-  /** Steers an ant carrying a delivery straight toward the queen chamber and deposits on
-   * arrival. Simple direct steering rather than real pathfinding — fine given the starter
-   * nest's simple, mostly-linear trunk-and-branches shape; a wall in the way just deflects the
-   * heading rather than getting the ant stuck. */
-  /** Follows the precomputed waypoint route to the queen chamber (see
-   * `beginUndergroundDelivery`) one leg at a time, rather than steering straight at the final
-   * target — a direct line usually cuts through undug walls the moment the target isn't a
-   * straight shot away (down a corridor, then around a corner into a branch chamber, say),
-   * which is the normal case here. */
-  private stepUndergroundDelivery(ant: Ant): void {
-    const speed = this.config.antUndergroundSpeed;
+  /** Steers `ant` one leg at a time along `path` (a queue of dug-tunnel waypoints, see
+   * `UndergroundGrid.findPath`), rather than steering straight at the final target — a direct
+   * line usually cuts through undug walls the moment the target isn't a straight shot away
+   * (down a corridor, then around a corner into a branch chamber, say), which is the normal
+   * case here. Shared by cargo delivery and brood-carrying, which both need identical
+   * wall-deviation/arrival-tolerance handling. Returns true once `path` is empty (arrived, or
+   * there was never a route), so the caller can wrap up (deposit cargo, settle brood, etc). */
+  private followPath(ant: Ant, path: Vector2[], speed: number): boolean {
+    if (path.length === 0) return true;
 
-    if (ant.deliveryPath.length === 0) {
-      // no route (already arrived, or the chamber was unreachable) — deposit in place
-      ant.cargo.count = 0;
-      ant.deliveringUnderground = false;
-      this.foodStored += 1;
-      return;
-    }
-
-    const waypoint = ant.deliveryPath[0];
+    const waypoint = path[0];
     // steer from this cell's own center, not the ant's raw (possibly off-center) position —
     // keeps the intended heading exactly aligned with the corridor (often just 1 cell wide)
     // instead of occasionally clipping a corner wall when the ant isn't perfectly centered
@@ -294,7 +296,58 @@ export class Simulation {
     // was tight enough — well under 1 world unit against 16-unit cells — that the ant could
     // orbit near a waypoint indefinitely without ever landing precisely inside it)
     if (distance(ant.position, waypoint) < half) {
-      ant.deliveryPath.shift();
+      path.shift();
+    }
+    return path.length === 0;
+  }
+
+  private stepUndergroundDelivery(ant: Ant): void {
+    if (this.followPath(ant, ant.deliveryPath, this.config.antUndergroundSpeed)) {
+      ant.cargo.count = 0;
+      ant.deliveringUnderground = false;
+      this.foodStored += 1;
+    }
+  }
+
+  /** Opportunistically notices any loose brood (not already being carried, not yet at the
+   * nursery) within `broodCarryNoticeRadius` of a wandering underground ant and picks up the
+   * nearest one — like the rest of underground behavior, this is "stumble upon," not a
+   * colony-wide assignment system. Returns true if a carry was started this frame. */
+  private tryPickUpBrood(ant: Ant): boolean {
+    let nearest: Brood | null = null;
+    let nearestDist = this.config.broodCarryNoticeRadius;
+    for (const b of this.brood) {
+      if (b.beingCarried || b.atNursery) continue;
+      const d = distance(ant.position, b.position);
+      if (d < nearestDist) {
+        nearest = b;
+        nearestDist = d;
+      }
+    }
+    if (!nearest) return false;
+
+    nearest.beingCarried = true;
+    ant.carriedBrood = nearest;
+    ant.broodCarryPath = this.undergroundGrid.findPath(ant.position, this.nurseryChamberPosition) ?? [];
+    return true;
+  }
+
+  /** Carries `ant.carriedBrood` toward the nursery chamber, dragging its `position` along with
+   * the ant so it visibly travels rather than teleporting on arrival. Settles it into the
+   * nursery (with a little scatter so brood doesn't all stack on one point) once the route is
+   * complete. */
+  private stepBroodCarry(ant: Ant): void {
+    const brood = ant.carriedBrood!;
+    const arrived = this.followPath(ant, ant.broodCarryPath, this.config.antUndergroundSpeed);
+    brood.position = { ...ant.position };
+
+    if (arrived) {
+      const scatter = scale(fromAngle(Math.random() * Math.PI * 2), Math.random() * this.config.mapGridSize * 0.3);
+      brood.position = add(this.nurseryChamberPosition, scatter);
+      brood.atNursery = true;
+      brood.beingCarried = false;
+      ant.carriedBrood = null;
+      ant.broodCarryPath = [];
     }
   }
 

@@ -3,8 +3,12 @@ import type { Vector2 } from './vector';
 
 export type BroodStage = 'egg' | 'larva' | 'pupa';
 
-/** A single egg/larva/pupa. Stays put where it's laid — real colonies constantly relocate
- * brood between chambers for temperature/humidity (brood transport), not modeled here. */
+/** A single egg/larva/pupa. Laid at the queen's position, then carried by a nurse ant to the
+ * nursery chamber (see `Simulation.stepUndergroundAnt`'s brood-carry branch) rather than piling
+ * up at the queen's feet — real colonies keep egg-laying and brood-rearing in separate chambers
+ * and continuously relocate brood between them (for climate control, and away from disturbance).
+ * Once settled in the nursery it stays put for the rest of its development; only the initial
+ * queen-chamber-to-nursery trip is modeled. */
 export interface Brood {
   stage: BroodStage;
   position: Vector2;
@@ -12,10 +16,16 @@ export interface Brood {
   /** Accumulated feeding while a larva — see `SimConfig.larvaNutritionNeeded`. Irrelevant for
    * eggs/pupae, which don't feed. */
   nutritionReceived: number;
+  /** True while some ant's `carriedBrood` currently points at this item — excludes it from
+   * being picked up a second time mid-carry. */
+  beingCarried: boolean;
+  /** True once a nurse has delivered this item to the nursery chamber. Newly-laid eggs start
+   * false (still sitting where the queen laid them) and are eligible for pickup. */
+  atNursery: boolean;
 }
 
 export function createEgg(position: Vector2): Brood {
-  return { stage: 'egg', position: { ...position }, ageDays: 0, nutritionReceived: 0 };
+  return { stage: 'egg', position: { ...position }, ageDays: 0, nutritionReceived: 0, beingCarried: false, atNursery: false };
 }
 
 export function advanceBroodAge(brood: Brood, cfg: SimConfig): void {

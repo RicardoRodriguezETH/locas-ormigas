@@ -9,6 +9,8 @@ describe('brood', () => {
     expect(egg.ageDays).toBe(0);
     expect(egg.nutritionReceived).toBe(0);
     expect(egg.position).toEqual({ x: 1, y: 2 });
+    expect(egg.beingCarried).toBe(false);
+    expect(egg.atNursery).toBe(false);
   });
 
   it('advanceBroodAge increments by one frame worth of days', () => {

@@ -37,6 +37,14 @@ describe('UndergroundGrid', () => {
     expect(grid.dugCount()).toBeGreaterThan(20); // more than just the entrance chamber alone
   });
 
+  it('seedStarterNest() returns distinct, dug queen and nursery chamber positions', () => {
+    const grid = new UndergroundGrid(defaultConfig);
+    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg } = grid.seedStarterNest(0, 0);
+    expect(grid.get(queenChamberXg, queenChamberYg).dug).toBe(true);
+    expect(grid.get(nurseryChamberXg, nurseryChamberYg).dug).toBe(true);
+    expect([queenChamberXg, queenChamberYg]).not.toEqual([nurseryChamberXg, nurseryChamberYg]);
+  });
+
   it('worldToGrid/gridToWorldOrigin round-trip like WorldGrid', () => {
     const grid = new UndergroundGrid(defaultConfig);
     const origin = grid.gridToWorldOrigin(5, -3);

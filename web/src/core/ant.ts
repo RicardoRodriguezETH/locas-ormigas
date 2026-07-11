@@ -1,3 +1,4 @@
+import type { Brood } from './brood';
 import type { Interest, SimConfig } from './config';
 import { type Vector2, add, directionTo, distance, normalize, rotate, scale } from './vector';
 
@@ -81,6 +82,13 @@ export interface Ant {
    * the target usually cuts through undug walls, so the ant follows this route step by step
    * instead. Empty when not delivering. */
   deliveryPath: Vector2[];
+  /** The brood item this ant is currently carrying to the nursery chamber, if any — see
+   * `Simulation.stepUndergroundAnt`'s brood-carry branch. Null the rest of the time (including
+   * while delivering cargo; an ant never does both at once). */
+  carriedBrood: Brood | null;
+  /** Remaining waypoints to the nursery chamber for the current carry, mirroring
+   * `deliveryPath`. Empty when not carrying. */
+  broodCarryPath: Vector2[];
 
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
@@ -130,6 +138,8 @@ export function createAnt(
     undergroundDutyUntil: -1,
     deliveringUnderground: false,
     deliveryPath: [],
+    carriedBrood: null,
+    broodCarryPath: [],
 
     lookingFor: 'food',
     nextTask: 'cave',

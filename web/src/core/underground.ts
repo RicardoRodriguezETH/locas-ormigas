@@ -164,9 +164,15 @@ export class UndergroundGrid {
    * immediately rather than an empty seed. Ongoing digging (see `Simulation.stepUndergroundAnt`)
    * extends this spine/branch shape further via `ensureDesignatedFrontier`.
    *
-   * Returns the grid position of the first (nearest-to-entrance) branch chamber, designated the
-   * queen's chamber by `Simulation` — closest for the shortest food-delivery walk. */
-  seedStarterNest(entranceXg: number, entranceYg: number): { queenChamberXg: number; queenChamberYg: number } {
+   * Returns the grid positions of the first two branch chambers: the nearest is designated the
+   * queen's chamber by `Simulation` (shortest food-delivery walk), the next one out is
+   * designated the nursery — a separate chamber for brood to be carried to and reared in,
+   * rather than a growing pile at the queen's feet, matching real colonies keeping egg-laying
+   * and brood-rearing in distinct chambers. */
+  seedStarterNest(
+    entranceXg: number,
+    entranceYg: number,
+  ): { queenChamberXg: number; queenChamberYg: number; nurseryChamberXg: number; nurseryChamberYg: number } {
     this.digChamber(entranceXg, entranceYg, 1);
 
     const trunkLength = 20;
@@ -181,6 +187,8 @@ export class UndergroundGrid {
 
     let queenChamberXg = entranceXg;
     let queenChamberYg = entranceYg;
+    let nurseryChamberXg = entranceXg;
+    let nurseryChamberYg = entranceYg;
     branches.forEach((branch, i) => {
       const trunkX = entranceXg;
       const trunkY = entranceYg + branch.alongTrunk;
@@ -190,10 +198,13 @@ export class UndergroundGrid {
       if (i === 0) {
         queenChamberXg = chamberX;
         queenChamberYg = trunkY;
+      } else if (i === 1) {
+        nurseryChamberXg = chamberX;
+        nurseryChamberYg = trunkY;
       }
     });
 
-    return { queenChamberXg, queenChamberYg };
+    return { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg };
   }
 
   /** Count of excavated tiles, for comparing against a population-proportional target volume

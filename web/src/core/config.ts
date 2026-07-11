@@ -161,7 +161,10 @@ export interface SimConfig {
    * cited figure — no source gave per-stage durations or feeding rates for L. niger specifically.
    *
    * Real ant colonies constantly relocate eggs/larvae/pupae between chambers by temperature/
-   * humidity need (brood transport) - not modeled here; brood stays where it's laid. */
+   * humidity need (brood transport) — modeled as a one-way trip: newly-laid eggs sit at the
+   * queen's chamber until a wandering underground ant notices and carries them to the nursery
+   * chamber (see `broodCarryNoticeRadius` and `Simulation.stepUndergroundAnt`), then stay put
+   * for the rest of development. */
   eggDurationDays: number;
   /** Larvae need both age *and* accumulated feeding (`larvaNutritionNeeded`) to pupate — well-
    * fed brood develops faster in reality, but here it's a hard gate: underfed larvae just wait. */
@@ -183,6 +186,10 @@ export interface SimConfig {
    * a simple cap so the new real reproduction pipeline (on top of the existing natural-death
    * respawn safety net) can't grow the colony unboundedly. */
   populationCapMultiplier: number;
+  /** How close (world units) a wandering underground ant needs to pass to an un-carried,
+   * not-yet-nursery brood item to notice and pick it up — opportunistic, like the rest of the
+   * underground behavior, not a colony-wide "go fetch this specific egg" assignment. */
+  broodCarryNoticeRadius: number;
 
   /** A cargo-carrying ant reaching the surface cave always descends to physically deliver the
    * food to underground storage rather than it vanishing at the surface — the two layers are
@@ -262,6 +269,7 @@ export const defaultConfig: SimConfig = {
   queenEggFoodCost: 5,
   queenEggRetryFrames: 60,
   populationCapMultiplier: 1.3,
+  broodCarryNoticeRadius: 24,
   antUndergroundDutyDaysRange: [1, 3],
 
   mapMinX: -350,
