@@ -213,14 +213,18 @@ export class Simulation {
     respawnAsCallow(ant, this.config, ant.position, ant.direction);
   }
 
-  /** Underground behavior. Four modes, checked in order:
+  /** Underground behavior. Five modes, checked in order:
    * 1. Carrying a delivery (`deliveringUnderground`): steer straight for the larder chamber
    *    and deposit on arrival — see `beginUndergroundDelivery`.
    * 2. Carrying brood (`carriedBrood`): steer for the nursery chamber and settle it there on
    *    arrival — see `tryPickUpBrood`/`stepBroodCarry`. Finishing a carry takes priority over
    *    resurfacing, same as a food delivery does.
-   * 3. Duty shift over (`frame >= undergroundDutyUntil`, and not mid-delivery/carry): resurface.
-   * 4. Otherwise, debugging-phase filler behavior: wander the dug tunnel network, opportunistically
+   * 3. Already walking out (`headingToSurface`): keep following the route back to the entrance
+   *    and resurface on arrival — see `beginHeadingToSurface`/`stepHeadToExit`.
+   * 4. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry):
+   *    start walking back to the entrance rather than resurfacing instantly from wherever the
+   *    ant happens to be — ants only ever cross layers by actually reaching the hole.
+   * 5. Otherwise, debugging-phase filler behavior: wander the dug tunnel network, opportunistically
    *    picking up any loose brood passed along the way, and digging out the colony's current
    *    designated site(s) if bumped into (see `UndergroundGrid.ensureDesignatedFrontier`) — no
    *    pheromones, no rest cycle. Ants bumping into a plain, non-designated wall just turn away;
@@ -235,8 +239,12 @@ export class Simulation {
       this.stepBroodCarry(ant);
       return;
     }
+    if (ant.headingToSurface) {
+      this.stepHeadToExit(ant);
+      return;
+    }
     if (this.frame >= ant.undergroundDutyUntil) {
-      this.ascendToSurface(ant);
+      this.beginHeadingToSurface(ant);
       return;
     }
     if (this.tryPickUpBrood(ant)) return; // starts carrying next frame
@@ -379,7 +387,25 @@ export class Simulation {
     this.undergroundAntCount++;
   }
 
-  /** End of an underground duty shift: back to the surface to resume foraging. */
+  /** Duty shift just ended: rather than resurfacing instantly from wherever the ant happens to
+   * be underground (which could be deep in the larder or nursery, or way out at the current dig
+   * frontier), start walking the route back to the entrance — see `stepHeadToExit`. Keeps
+   * "ants only ever cross layers by reaching the hole" literally true, not just true by
+   * convention. */
+  private beginHeadingToSurface(ant: Ant): void {
+    ant.headingToSurface = true;
+    ant.exitPath = this.undergroundGrid.findPath(ant.position, this.cavePosition) ?? [];
+  }
+
+  /** Follows `ant.exitPath` back to the entrance one leg at a time, then actually resurfaces
+   * once it arrives — see `beginHeadingToSurface`. */
+  private stepHeadToExit(ant: Ant): void {
+    if (this.followPath(ant, ant.exitPath, this.config.antUndergroundSpeed)) {
+      this.ascendToSurface(ant);
+    }
+  }
+
+  /** Ant has physically reached the entrance: pop out of the hole and resume foraging. */
   private ascendToSurface(ant: Ant): void {
     const direction = fromAngle(Math.random() * Math.PI * 2);
     ant.layer = 'surface';
@@ -387,6 +413,8 @@ export class Simulation {
     ant.direction = direction;
     ant.speed = 0.1;
     ant.paused = false;
+    ant.headingToSurface = false;
+    ant.exitPath = [];
     ant.restAt = this.frame + randomInRange(this.config.antActiveDurationRange);
     this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
   }

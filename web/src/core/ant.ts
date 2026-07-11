@@ -90,6 +90,14 @@ export interface Ant {
   /** Remaining waypoints to the nursery chamber for the current carry, mirroring
    * `deliveryPath`. Empty when not carrying. */
   broodCarryPath: Vector2[];
+  /** True once an underground ant's duty shift has ended and it's walking back to the cave
+   * entrance to resurface, rather than resurfacing instantly from wherever it happens to be —
+   * ants only ever cross layers by actually reaching the hole. See
+   * `Simulation.stepUndergroundAnt`'s exit branch. */
+  headingToSurface: boolean;
+  /** Remaining waypoints back to the entrance for the current exit, mirroring `deliveryPath`/
+   * `broodCarryPath`. Empty when not heading to surface. */
+  exitPath: Vector2[];
 
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
@@ -141,6 +149,8 @@ export function createAnt(
     deliveryPath: [],
     carriedBrood: null,
     broodCarryPath: [],
+    headingToSurface: false,
+    exitPath: [],
 
     lookingFor: 'food',
     nextTask: 'cave',

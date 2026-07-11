@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAnt } from '../ant';
+import { type AntLayer, createAnt } from '../ant';
 import { createEgg } from '../brood';
 import { defaultConfig } from '../config';
 import { readPheromoneStrength } from '../grid';
@@ -213,5 +213,36 @@ describe('Simulation', () => {
     // otherwise this brood item would stay "beingCarried" forever with no ant actually
     // carrying it, permanently excluded from ever being picked up again
     expect(brood.beingCarried).toBe(false);
+  });
+
+  it('an ant whose duty shift ends walks back to the entrance rather than resurfacing instantly from wherever it is', () => {
+    const sim = new Simulation(defaultConfig, { randomizeGrid: false });
+    sim.init(1);
+
+    const ant = sim.ants[0];
+    // routed through a function call, not a literal assignment, so TS doesn't narrow
+    // `ant.layer`'s type down to the literal 'underground' for the rest of this test
+    const asLayer = (l: AntLayer): AntLayer => l;
+    ant.layer = asLayer('underground');
+    ant.position = { ...sim.nurseryChamberPosition }; // far from the entrance
+    ant.undergroundDutyUntil = 0; // duty already expired
+
+    sim.update();
+
+    // must not teleport to the surface from wherever it happened to be — it should start
+    // walking the route back to the entrance first
+    expect(ant.layer).toBe('underground');
+    expect(ant.headingToSurface).toBe(true);
+    expect(ant.exitPath.length).toBeGreaterThan(0);
+
+    // ...and only actually resurfaces once it's walked there
+    let resurfaced = false;
+    for (let i = 0; i < 2000 && !resurfaced; i++) {
+      sim.update();
+      resurfaced = ant.layer === 'surface';
+    }
+    expect(resurfaced).toBe(true);
+    expect(ant.headingToSurface).toBe(false);
+    expect(ant.exitPath).toHaveLength(0);
   });
 });
