@@ -216,6 +216,10 @@ export interface SimConfig {
   pheromoneDepositAmount: number;
   /** Strength at which the debug overlay renders a tile at full intensity. */
   pheromoneSaturation: number;
+  /** 'legacy'/'gradient' only: how far (0-1) an ant rotates its heading toward the best local
+   * pheromone lead each communication. 1 = hard-snap onto the stored point (orbits it and
+   * stalls); low values glide the ant along the trail. See `communicatePheromonesScored`. */
+  pheromoneLeadBlend: number;
   pheromoneAlgorithm: PheromoneAlgorithm;
 }
 
@@ -289,5 +293,6 @@ export const defaultConfig: SimConfig = {
   pheromoneDecayPerFrame: 0.9998,
   pheromoneDepositAmount: 1,
   pheromoneSaturation: 1,
+  pheromoneLeadBlend: 0.5,
   pheromoneAlgorithm: 'gradient',
 };

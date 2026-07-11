@@ -57,15 +57,15 @@ describe('Simulation', () => {
     expect(pheromones.cave.strength).toBe(0);
   });
 
-  it('gradient algorithm snaps toward a nearby lead, scoring it by decayed freshness', () => {
+  it('gradient algorithm steers toward a nearby lead, scoring it by decayed freshness', () => {
     const localCfg = { ...cfg, antComEveryFrame: true };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
     const lead = sim.grid.get(1, 0).pheromones.food;
     lead.strength = 1;
     lead.lastUpdated = 0;
-    lead.where = { x: 100, y: 100 };
+    lead.where = { x: 100, y: 100 }; // to the ant's south-east
 
-    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: -1 });
+    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: -1 }); // heading straight up (north)
     seeker.speed = 0;
     seeker.lookingFor = 'food';
     sim.ants = [seeker];
@@ -73,8 +73,13 @@ describe('Simulation', () => {
     sim.update();
 
     expect(seeker.maxLeadScore).toBeCloseTo(1);
+    // the heading rotates toward the lead (blended, not hard-snapped): its x-component swings
+    // from 0 toward the eastward lead, and it aligns more with the lead than the old heading did
     expect(seeker.direction.x).toBeGreaterThan(0);
-    expect(seeker.direction.y).toBeGreaterThan(0);
+    const towardLead = { x: 92 / Math.hypot(92, 92), y: 92 / Math.hypot(92, 92) };
+    const alignment = seeker.direction.x * towardLead.x + seeker.direction.y * towardLead.y;
+    const oldAlignment = 0 * towardLead.x + -1 * towardLead.y; // old heading {0,-1}
+    expect(alignment).toBeGreaterThan(oldAlignment);
   });
 
   it('a fresh ant surrounded by empty cells does not steer toward the world origin', () => {
@@ -157,17 +162,18 @@ describe('Simulation', () => {
     expect(decayedLater).toBeGreaterThan(0);
   });
 
-  it('legacy algorithm: deterministically snaps toward the freshest known lead, with no decay', () => {
+  it('legacy algorithm: steers toward the freshest known lead by its raw frame-time, with no decay', () => {
     const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'legacy' as const };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
 
+    // a scout deposits a 'food' lead pointing at {100,100} into cell (0,0)
     const scout = createAnt(localCfg, { x: 5, y: 5 }, { x: 1, y: 0 });
     scout.speed = 0;
     scout.lookingFor = 'cave';
     scout.lastTimeSeen.food = 50;
     scout.oldestPositionRemembered = { x: 100, y: 100 };
 
-    const seeker = createAnt(localCfg, { x: 20, y: 5 }, { x: -1, y: 0 });
+    const seeker = createAnt(localCfg, { x: 20, y: 5 }, { x: -1, y: 0 }); // heading west, away from the lead
     seeker.speed = 0;
     seeker.lookingFor = 'food';
 
@@ -175,9 +181,12 @@ describe('Simulation', () => {
     sim.frame = 60;
     sim.update();
 
+    // it scored the lead by its raw deposit time (no decay), and turned toward it (blended)
     expect(seeker.maxLeadScore).toBe(50);
-    expect(seeker.direction.x).toBeGreaterThan(0);
-    expect(seeker.direction.y).toBeGreaterThan(0);
+    const toward = { x: 80 / Math.hypot(80, 95), y: 95 / Math.hypot(80, 95) };
+    const alignment = seeker.direction.x * toward.x + seeker.direction.y * toward.y;
+    const oldAlignment = -1 * toward.x + 0 * toward.y; // old heading {-1,0}
+    expect(alignment).toBeGreaterThan(oldAlignment);
   });
 
   it('counts a delivery and feeds the colony-level foraging throttle EMAs', () => {

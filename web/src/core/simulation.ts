@@ -662,14 +662,33 @@ export class Simulation {
     const useDecay = this.config.pheromoneAlgorithm === 'gradient';
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
 
+    // Re-evaluate the *current* best lead in the neighborhood every communication, then steer by
+    // BLENDING toward it rather than hard-snapping. Two deliberate departures from the original,
+    // both needed for trails to actually converge (measured):
+    //  - The original anchored to a persistent `maxLeadScore` high-water mark and only re-steered
+    //    on a strictly-fresher lead, so an ant went effectively deaf to the field after its first
+    //    commit and drifted home by random walk — trails never tightened (laden ants stayed
+    //    spread ~150u from the ideal line). Recomputing the best local lead each cycle keeps ants
+    //    actually following the trail.
+    //  - Hard-snapping the heading onto the stored `where` (a point only ~1 cell back) makes ants
+    //    orbit that point and stall — with re-evaluation on, throughput collapsed. Blending a
+    //    fraction of the way there each cycle glides the ant along the trail instead of orbiting.
+    let bestScore = 0;
+    let bestWhere: Vector2 | null = null;
     for (const [dx, dy] of GRID_COM_SCAN) {
       const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
       const score = useDecay ? readPheromoneStrength(info, this.frame, this.config.pheromoneDecayPerFrame) : info.time;
-      if (score > ant.maxLeadScore) {
-        ant.maxLeadScore = score;
-        ant.direction = directionTo(ant.position, info.where, ant.direction);
-        ant.informedUntil = this.frame + this.config.antInformedWindow;
+      if (score > bestScore) {
+        bestScore = score;
+        bestWhere = info.where;
       }
+    }
+    ant.maxLeadScore = bestScore;
+    if (bestWhere) {
+      const toward = directionTo(ant.position, bestWhere, ant.direction);
+      const b = this.config.pheromoneLeadBlend;
+      ant.direction = normalize(add(scale(ant.direction, 1 - b), scale(toward, b)), ant.direction);
+      ant.informedUntil = this.frame + this.config.antInformedWindow;
     }
 
     if (ant.pheromonesWrite) {
