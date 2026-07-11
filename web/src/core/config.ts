@@ -66,6 +66,21 @@ export interface SimConfig {
   /** Heading jitter while milling at rest. */
   antRestErratic: number;
 
+  /** Colony-level foraging throttle: real harvester ant colonies adjust how many foragers they
+   * send out based on recent forager *return* rate relative to their own baseline — a burst of
+   * successful returns (good conditions) recruits more foragers, a lull (scarcity/risk) pulls
+   * them back in, independent of any single ant's own experience (Gordon's encounter-rate task
+   * allocation). Modeled here as two EMAs of colony-wide deliveries/frame; their ratio scales
+   * how long ants stay active vs. resting. */
+  antForagingThrottleFastDecay: number;
+  antForagingThrottleSlowDecay: number;
+  /** Clamp on the throttle ratio, so a lucky/unlucky streak can't swing the duty cycle wildly. */
+  antForagingThrottleMin: number;
+  antForagingThrottleMax: number;
+  /** Below this delivery-rate baseline (deliveries/frame, colony-wide), the throttle stays
+   * neutral (1) rather than reacting to noise before a real baseline has formed. */
+  antForagingThrottleWarmupRate: number;
+
   mapMinX: number;
   mapMinY: number;
   mapMaxX: number;
@@ -101,6 +116,13 @@ export const defaultConfig: SimConfig = {
   antRestTetherRadius: 60,
   antRestSpeed: 0.2,
   antRestErratic: 0.35,
+
+  // half-life ~23 frames (recent conditions) vs ~693 frames (long-run baseline)
+  antForagingThrottleFastDecay: 0.97,
+  antForagingThrottleSlowDecay: 0.999,
+  antForagingThrottleMin: 0.7,
+  antForagingThrottleMax: 1.4,
+  antForagingThrottleWarmupRate: 0.02,
 
   mapMinX: -350,
   mapMinY: -250,

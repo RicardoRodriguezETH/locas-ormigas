@@ -41,6 +41,14 @@ export class Simulation {
   frame = 0;
   cavePosition: Vector2 = { x: 0, y: 0 };
 
+  /** Colony-level foraging throttle state — see `SimConfig.antForagingThrottle*`. Fast/slow EMAs
+   * of colony-wide deliveries/frame; `foragingThrottle` is their clamped ratio, recomputed once
+   * per frame and applied to every ant's activity cycle that frame. */
+  deliveryEmaFast = 0;
+  deliveryEmaSlow = 0;
+  foragingThrottle = 1;
+  private deliveriesThisFrame = 0;
+
   constructor(config: SimConfig = defaultConfig, options: SimulationOptions = {}) {
     this.config = config;
     this.grid = new WorldGrid(config, { randomize: options.randomizeGrid ?? true });
@@ -90,9 +98,11 @@ export class Simulation {
   }
 
   update(): void {
+    this.deliveriesThisFrame = 0;
+
     for (const ant of this.ants) {
       const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
-      updateActivityCycle(ant, this.config, this.frame, eligibleToRest);
+      updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle);
       if (ant.paused) {
         this.stepRestingAnt(ant);
       } else {
@@ -102,7 +112,25 @@ export class Simulation {
     for (const ant of this.ants) {
       updateAnt(ant, this.config, this.frame);
     }
+
+    this.updateForagingThrottle();
     this.frame += 1;
+  }
+
+  /** Recomputes the fast/slow delivery-rate EMAs from this frame's tally and derives next
+   * frame's throttle from their ratio (see `SimConfig.antForagingThrottle*` for the biological
+   * rationale). Runs once per frame, after all ants have moved. */
+  private updateForagingThrottle(): void {
+    const cfg = this.config;
+    this.deliveryEmaFast = this.deliveryEmaFast * cfg.antForagingThrottleFastDecay + this.deliveriesThisFrame * (1 - cfg.antForagingThrottleFastDecay);
+    this.deliveryEmaSlow = this.deliveryEmaSlow * cfg.antForagingThrottleSlowDecay + this.deliveriesThisFrame * (1 - cfg.antForagingThrottleSlowDecay);
+
+    if (this.deliveryEmaSlow < cfg.antForagingThrottleWarmupRate) {
+      this.foragingThrottle = 1; // no established baseline yet — stay neutral rather than react to noise
+      return;
+    }
+    const ratio = this.deliveryEmaFast / this.deliveryEmaSlow;
+    this.foragingThrottle = Math.min(cfg.antForagingThrottleMax, Math.max(cfg.antForagingThrottleMin, ratio));
   }
 
   /** Resting ants just mill slowly near the cave — no pheromone communication, no goal-seeking
@@ -135,6 +163,9 @@ export class Simulation {
     const cell = this.grid.get(xg, yg).cell;
     if (!cell) return;
 
+    if (cell.type === 'cave' && ant.lookingFor === 'cave') {
+      this.deliveriesThisFrame++; // about to complete a food->cave round trip
+    }
     cell.affectAnt(ant, { frame: this.frame, config: this.config });
     if (cell.type === 'food' || cell.type === 'cave') {
       ant.lastTimeSeen[cell.type] = this.frame;

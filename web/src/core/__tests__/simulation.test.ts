@@ -134,6 +134,48 @@ describe('Simulation', () => {
     expect(seeker.direction.y).toBeGreaterThan(0);
   });
 
+  it('counts a delivery and feeds the colony-level foraging throttle EMAs', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.grid.seedCell('cave', 0, 0);
+    const ant = createAnt(cfg, { x: 8, y: 8 }, { x: 0, y: 0 });
+    ant.speed = 0;
+    ant.lookingFor = 'cave'; // about to complete a delivery this frame
+    sim.ants = [ant];
+
+    sim.update();
+
+    expect(sim.deliveryEmaFast).toBeGreaterThan(0);
+    expect(sim.deliveryEmaSlow).toBeGreaterThan(0);
+  });
+
+  it('foraging throttle stays neutral before a delivery-rate baseline has formed', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.ants = []; // nobody delivering anything
+    for (let i = 0; i < 50; i++) sim.update();
+    expect(sim.foragingThrottle).toBe(1);
+  });
+
+  it('foraging throttle stays within its configured clamp range under sustained delivery pressure', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.grid.seedCell('food', 0, 0);
+    sim.grid.seedCell('cave', 4, 0);
+    // several ants sat right on the cave tile, always "delivering" every frame once looking for cave
+    sim.ants = Array.from({ length: 10 }, () => {
+      const ant = createAnt(cfg, { x: 4 * cfg.mapGridSize + 8, y: 8 }, { x: 0, y: 0 });
+      ant.speed = 0;
+      ant.lookingFor = 'cave';
+      return ant;
+    });
+
+    for (let i = 0; i < 300; i++) {
+      sim.ants.forEach((ant) => (ant.lookingFor = 'cave')); // keep "delivering" every frame
+      sim.update();
+    }
+
+    expect(sim.foragingThrottle).toBeGreaterThanOrEqual(cfg.antForagingThrottleMin);
+    expect(sim.foragingThrottle).toBeLessThanOrEqual(cfg.antForagingThrottleMax);
+  });
+
   it('teleports an ant that steps onto a linked portal', () => {
     const sim = new Simulation(cfg, { randomizeGrid: false });
     sim.setCell('portal', { x: 0, y: 0 });

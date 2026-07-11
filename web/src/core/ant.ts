@@ -146,16 +146,20 @@ function randomInRange([min, max]: readonly [number, number]): number {
  *
  * `eligibleToRest` gates only the *start* of a rest (an ant already out foraging with an empty
  * schedule slot just keeps going until it's actually near the cave and free-handed); waking up
- * is purely time-based so a resting ant never gets stuck resting forever. */
-export function updateActivityCycle(ant: Ant, cfg: SimConfig, frame: number, eligibleToRest: boolean): void {
+ * is purely time-based so a resting ant never gets stuck resting forever.
+ *
+ * `throttle` is the colony-level foraging throttle (see `SimConfig.antForagingThrottle*`): above
+ * 1 it stretches active windows and shrinks rest windows (more of the colony out foraging),
+ * below 1 it does the opposite (colony conserving effort). */
+export function updateActivityCycle(ant: Ant, cfg: SimConfig, frame: number, eligibleToRest: boolean, throttle = 1): void {
   if (ant.paused) {
     if (frame >= ant.pauseUntil) {
       unpause(ant);
-      ant.restAt = frame + randomInRange(cfg.antActiveDurationRange);
+      ant.restAt = frame + Math.round(randomInRange(cfg.antActiveDurationRange) * throttle);
     }
   } else if (frame >= ant.restAt) {
     if (eligibleToRest) {
-      pause(ant, frame, randomInRange(cfg.antRestDurationRange));
+      pause(ant, frame, Math.round(randomInRange(cfg.antRestDurationRange) / throttle));
     } else {
       // not near the cave (or currently carrying food) — check again shortly rather than
       // waiting for the next full active-duration window to roll around

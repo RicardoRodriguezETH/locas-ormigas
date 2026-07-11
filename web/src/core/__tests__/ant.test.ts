@@ -89,6 +89,24 @@ describe('ant', () => {
     expect(ant.restAt).toBe(250); // next active window scheduled from the wake-up frame
   });
 
+  it('the colony-level foraging throttle stretches/shrinks active and rest windows', () => {
+    const cfg = { ...defaultConfig, antActiveDurationRange: [100, 100] as [number, number], antRestDurationRange: [100, 100] as [number, number] };
+
+    const busy = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    busy.restAt = 100;
+    updateActivityCycle(busy, cfg, 100, true, 2); // throttle > 1: colony ramping up foraging
+    expect(busy.pauseUntil).toBe(150); // rest window halved (100 / 2)
+    updateActivityCycle(busy, cfg, 150, true, 2);
+    expect(busy.restAt).toBe(350); // active window doubled (150 + 100*2)
+
+    const idle = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    idle.restAt = 100;
+    updateActivityCycle(idle, cfg, 100, true, 0.5); // throttle < 1: colony conserving effort
+    expect(idle.pauseUntil).toBe(300); // rest window doubled (100 / 0.5)
+    updateActivityCycle(idle, cfg, 300, true, 0.5);
+    expect(idle.restAt).toBe(350); // active window halved (300 + 100*0.5)
+  });
+
   it('will not start resting until eligible (near the cave, not carrying food)', () => {
     const cfg = { ...defaultConfig, antActiveDurationRange: [100, 100] as [number, number], antRestDurationRange: [50, 50] as [number, number] };
     const ant = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
