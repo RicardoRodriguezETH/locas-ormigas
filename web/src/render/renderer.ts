@@ -163,6 +163,7 @@ export class SimulationRenderer {
       sprite.y = ant.position.y;
       sprite.rotation = dirToRad(ant);
       sprite.texture = this.textures.antWalk[walkFrame(ant)];
+      sprite.tint = (ant.color[0] << 16) | (ant.color[1] << 8) | ant.color[2];
       this.cargoSprites[i].visible = ant.cargo.count > 0;
     }
   }

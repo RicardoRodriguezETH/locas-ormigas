@@ -1,6 +1,6 @@
 import type { Ant } from './ant';
 import type { Interest, SimConfig } from './config';
-import { CaveCell, type Cell, FoodCell, GrassCell, PortalCell, PortalFactory } from './cells';
+import { CaveCell, type Cell, FoodCell, type FoodType, GrassCell, PortalCell, PortalFactory } from './cells';
 import { type Vector2 } from './vector';
 
 export interface PheromoneInfo {
@@ -125,11 +125,12 @@ export class WorldGrid {
     return this.get(xg, yg).pass;
   }
 
-  /** Places food/cave directly by grid coordinates, used for initial world seeding. */
-  seedCell(type: 'food' | 'cave', xg: number, yg: number): void {
+  /** Places food/cave directly by grid coordinates, used for initial world seeding. `foodType`
+   * is ignored for 'cave'. */
+  seedCell(type: 'food' | 'cave', xg: number, yg: number, foodType?: FoodType): void {
     const data = this.get(xg, yg);
     data.pass = true;
-    data.cell = type === 'food' ? new FoodCell() : new CaveCell();
+    data.cell = type === 'food' ? new FoodCell(foodType) : new CaveCell();
   }
 
   removeCell(xg: number, yg: number): void {

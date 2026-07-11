@@ -1,11 +1,14 @@
 import {
   type Ant,
+  advanceAge,
   createAnt,
   enablePheromonesWrite,
+  getLifeStage,
   isComNeeded,
   objectAvoidance,
   pause,
   randomInRange,
+  respawnAsCallow,
   updateActivityCycle,
   updateAnt,
   updateRestingMovement,
@@ -76,6 +79,10 @@ export class Simulation {
       // otherwise every ant starts already outside resting range of its own nest
       const position = add(this.cavePosition, scale(direction, 50 + i / 60));
       const ant = createAnt(this.config, position, direction);
+      // an established colony has a natural mix of ages, not a nursery of identical newborns —
+      // sample uniformly up to this ant's own sampled lifespan (most land well past the callow
+      // threshold, a few land young, matching a real standing age structure)
+      ant.ageDays = Math.random() * ant.naturalLifespanDays;
       // only a small scouting party starts out foraging — the rest of the colony stays put at
       // the nest until recruited by a real trail (caveFoodSignal, see update()), with this long
       // range purely as a fallback so the colony isn't dormant forever if nothing is ever found
@@ -109,17 +116,29 @@ export class Simulation {
       }
     }
 
+    // one honeydew source (aphid trophobiosis, the carb staple), one prey item (protein) —
+    // mirroring L. niger's real dual-resource foraging strategy rather than two identical tiles
     const lastWallX = WALLS[WALLS.length - 1].x;
-    this.grid.seedCell('food', originX + lastWallX + 4, originY + 2);
-    this.grid.seedCell('food', originX + lastWallX + 4, originY + WALL_REGION_HEIGHT - 3);
+    this.grid.seedCell('food', originX + lastWallX + 4, originY + 2, 'honeydew');
+    this.grid.seedCell('food', originX + lastWallX + 4, originY + WALL_REGION_HEIGHT - 3, 'prey');
   }
 
   update(): void {
     this.deliveriesThisFrame = 0;
 
     for (const ant of this.ants) {
+      advanceAge(ant, this.config);
+      if (ant.ageDays >= ant.naturalLifespanDays) {
+        const direction = fromAngle(Math.random() * Math.PI * 2);
+        respawnAsCallow(ant, this.config, add(this.cavePosition, scale(direction, 50)), direction);
+      }
+
+      const isCallow = getLifeStage(ant, this.config) === 'callow';
+      // pale/soft-bodied teneral coloring while callow, full color once mature
+      ant.color = isCallow ? [220, 220, 220] : [255, 255, 255];
+
       const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
-      updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal);
+      updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal, isCallow);
       if (ant.paused) {
         this.stepRestingAnt(ant);
       } else {

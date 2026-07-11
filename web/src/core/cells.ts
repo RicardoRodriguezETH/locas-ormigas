@@ -24,8 +24,34 @@ export class GrassCell implements Cell {
   }
 }
 
+/** L. niger runs a generalist, dual-resource diet: honeydew solicited from tended aphids
+ * (mostly carbohydrate, a renewable trickle from a living aphid colony) and hunted/scavenged
+ * insect prey (mostly protein, a one-off item that's fully consumed). Nutrient amounts here are
+ * a game-balance approximation, not a cited figure — real aphid-colony/prey yields vary hugely —
+ * but the type split and the fact that a source is a finite quantity, not an inexhaustible tile,
+ * are both true to how these colonies actually forage. Not yet wired to deplete on harvest (see
+ * `FoodCell.affectAnt`) — that's a bigger behavioral change deferred to a later pass so it can
+ * be paired with source respawning/rediscovery instead of just letting the colony starve once
+ * the stress-test map's two fixed sources run dry. */
+export type FoodType = 'honeydew' | 'prey';
+
+const FOOD_NUTRIENTS_MAX: Record<FoodType, number> = {
+  honeydew: 4000,
+  prey: 800,
+};
+
 export class FoodCell implements Cell {
   readonly type = 'food';
+  readonly foodType: FoodType;
+  readonly nutrientsMax: number;
+  /** Remaining nutrients. Currently cosmetic/informational only — see class doc comment. */
+  nutrients: number;
+
+  constructor(foodType: FoodType = 'honeydew') {
+    this.foodType = foodType;
+    this.nutrientsMax = FOOD_NUTRIENTS_MAX[foodType];
+    this.nutrients = this.nutrientsMax;
+  }
 
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'food') return;

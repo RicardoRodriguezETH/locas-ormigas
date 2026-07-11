@@ -60,9 +60,34 @@ export interface Ant {
   /** Frame cadence on which this ant checks/shares pheromone info (staggered per-ant). */
   comEvery: number;
   comEveryOffset: number;
+
+  /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
+   * tied to any behavior; tracked for realism and future use. */
+  size: number;
+  /** Age in simulated days (fractional; see `SimConfig.framesPerDay`). Drives `getLifeStage`
+   * and, on exceeding `naturalLifespanDays`, natural death. */
+  ageDays: number;
+  /** This individual's natural lifespan in days, sampled once at birth — see
+   * `SimConfig.antLifespanMinDays`/`antLifespanMaxDays`. */
+  naturalLifespanDays: number;
 }
 
-export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2): Ant {
+export type LifeStage = 'callow' | 'mature';
+
+/** Newly-eclosed workers stay "callow" (too young to forage, see `updateActivityCycle`) until
+ * `SimConfig.antCallowMaturityDays` have passed. */
+export function getLifeStage(ant: Ant, cfg: SimConfig): LifeStage {
+  return ant.ageDays < cfg.antCallowMaturityDays ? 'callow' : 'mature';
+}
+
+/** Samples a natural lifespan biased toward the low end of the range, matching real
+ * right-skewed worker survivorship (most workers die well before the observed maximum). */
+function sampleLifespanDays(cfg: SimConfig): number {
+  const { antLifespanMinDays: min, antLifespanMaxDays: max } = cfg;
+  return min + (max - min) * Math.random() ** 2;
+}
+
+export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2, initialAgeDays = 0): Ant {
   const pastPositions = Array.from({ length: cfg.antPositionMemorySize }, () => ({ ...position }));
   return {
     position: { ...position },
@@ -101,7 +126,24 @@ export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2)
 
     comEvery: cfg.antComNeedFrameStep[0] + Math.floor(Math.random() * (cfg.antComNeedFrameStep[1] - cfg.antComNeedFrameStep[0] + 1)),
     comEveryOffset: Math.floor(Math.random() * cfg.antComNeedFrameStep[1]) + 1,
+
+    size: cfg.antSizeRangeMm[0] + Math.random() * (cfg.antSizeRangeMm[1] - cfg.antSizeRangeMm[0]),
+    ageDays: initialAgeDays,
+    naturalLifespanDays: sampleLifespanDays(cfg),
   };
+}
+
+/** Advances an ant's age by one frame's worth of simulated time. Call once per ant per frame. */
+export function advanceAge(ant: Ant, cfg: SimConfig): void {
+  ant.ageDays += 1 / cfg.framesPerDay;
+}
+
+/** Natural death, standing in for real brood-rearing (no queen/egg-laying system exists yet):
+ * rather than actually removing the ant (which would slowly empty the colony over a long play
+ * session with nothing replacing losses), it re-emerges as a fresh callow worker at the nest —
+ * new size/lifespan sampled, age reset to 0, task/pheromone/trail state reset like a new spawn. */
+export function respawnAsCallow(ant: Ant, cfg: SimConfig, position: Vector2, direction: Vector2): void {
+  Object.assign(ant, createAnt(cfg, position, direction, 0));
 }
 
 /** Push `position` into the ring buffer, dropping the oldest remembered position. */
@@ -156,7 +198,10 @@ export function randomInRange([min, max]: readonly [number, number]): number {
  * proportional to it (`SimConfig.antRecruitmentWakeGain`), on top of the fallback duration
  * timer, so recruitment tracks real trail evidence rather than a blind clock: no signal means
  * the fallback timer is the only thing waking anyone up, a strong fresh trail wakes the colony
- * fast. */
+ * fast.
+ *
+ * `isCallow` (see `getLifeStage`) unconditionally blocks waking — real callow workers are too
+ * young to forage regardless of trail strength or elapsed time. */
 export function updateActivityCycle(
   ant: Ant,
   cfg: SimConfig,
@@ -164,8 +209,10 @@ export function updateActivityCycle(
   eligibleToRest: boolean,
   throttle = 1,
   recruitmentSignal = 0,
+  isCallow = false,
 ): void {
   if (ant.paused) {
+    if (isCallow) return;
     const recruited = recruitmentSignal > 0 && Math.random() < recruitmentSignal * cfg.antRecruitmentWakeGain;
     if (frame >= ant.pauseUntil || recruited) {
       unpause(ant);

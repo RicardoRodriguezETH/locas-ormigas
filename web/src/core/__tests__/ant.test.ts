@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../config';
 import {
   createAnt,
+  getLifeStage,
   isComNeeded,
   objectAvoidance,
+  respawnAsCallow,
   storePosition,
   taskFound,
   updateActivityCycle,
@@ -163,5 +165,51 @@ describe('ant', () => {
     const ant2 = createAnt(defaultConfig, { x: 0, y: 0 }, { x: 1, y: 0 });
     objectAvoidance(ant2, defaultConfig, () => true);
     expect(ant2.direction).toEqual({ x: 1, y: 0 });
+  });
+
+  it('samples size and natural lifespan within their configured ranges, and starts callow at age 0', () => {
+    const cfg = { ...defaultConfig, antSizeRangeMm: [3.5, 5.0] as [number, number], antLifespanMinDays: 120, antLifespanMaxDays: 1100 };
+    const ant = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    expect(ant.size).toBeGreaterThanOrEqual(3.5);
+    expect(ant.size).toBeLessThanOrEqual(5.0);
+    expect(ant.naturalLifespanDays).toBeGreaterThanOrEqual(120);
+    expect(ant.naturalLifespanDays).toBeLessThanOrEqual(1100);
+    expect(ant.ageDays).toBe(0);
+    expect(getLifeStage(ant, cfg)).toBe('callow');
+  });
+
+  it('matures from callow to mature once past the callow threshold', () => {
+    const cfg = { ...defaultConfig, antCallowMaturityDays: 5 };
+    const ant = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    ant.ageDays = 4.9;
+    expect(getLifeStage(ant, cfg)).toBe('callow');
+    ant.ageDays = 5.1;
+    expect(getLifeStage(ant, cfg)).toBe('mature');
+  });
+
+  it('a callow ant cannot be woken by timer or recruitment', () => {
+    const cfg = { ...defaultConfig, antCallowMaturityDays: 5, antRecruitmentWakeGain: 1 };
+    vi.spyOn(Math, 'random').mockReturnValue(0); // would always "win" the recruitment roll if checked
+    const ant = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    ant.paused = true;
+    ant.pauseUntil = 0; // already expired — would normally wake immediately
+    updateActivityCycle(ant, cfg, 100, true, 1, 1, true); // isCallow=true, strong recruitment signal
+    expect(ant.paused).toBe(true);
+
+    updateActivityCycle(ant, cfg, 100, true, 1, 1, false); // now mature
+    expect(ant.paused).toBe(false);
+  });
+
+  it('respawns as a fresh callow worker at the given position on natural death', () => {
+    const cfg = { ...defaultConfig };
+    const ant = createAnt(cfg, { x: 500, y: 500 }, { x: 1, y: 0 });
+    ant.ageDays = ant.naturalLifespanDays + 1;
+    ant.cargo.count = 1;
+
+    respawnAsCallow(ant, cfg, { x: 0, y: 0 }, { x: 0, y: 1 });
+    expect(ant.position).toEqual({ x: 0, y: 0 });
+    expect(ant.ageDays).toBe(0);
+    expect(ant.cargo.count).toBe(0);
+    expect(getLifeStage(ant, cfg)).toBe('callow');
   });
 });

@@ -108,6 +108,31 @@ export interface SimConfig {
    * neutral (1) rather than reacting to noise before a real baseline has formed. */
   antForagingThrottleWarmupRate: number;
 
+  /** Real-time compression: how many simulation frames make up one in-game day. Ant lifespans
+   * are months to years — this scales that down to something a play session can actually show
+   * (see `antLifespanMinDays`/`antLifespanMaxDays`). Purely a presentation choice, tunable. */
+  framesPerDay: number;
+  /** Adult worker body length (mm), sampled per-ant. Lasius niger is monomorphic (no distinct
+   * size castes) with only minor individual variation: workers run 3.5-5mm. Not currently tied
+   * to any behavior (research on L. niger found no consistent link between worker size and
+   * task/efficiency) — modeled for realism and to have on hand for later. */
+  antSizeRangeMm: [number, number];
+  /** Newly-eclosed ("callow"/teneral) workers are pale, soft-bodied, and stay inside the nest
+   * doing brood care rather than foraging until they've matured — real colonies show this
+   * age-based division of labor (temporal polyethism). No L. niger-specific figure was found in
+   * research for this species; this is a reasonable placeholder pending a better source. While
+   * callow, an ant cannot be woken (by timer or recruitment) — see `updateActivityCycle`. */
+  antCallowMaturityDays: number;
+  /** [min, max] natural worker lifespan in days, sampled per-ant with a bias toward the low end
+   * (real survivorship is right-skewed — most workers die well before the maximum). Grounded in
+   * Lund et al. 2016: workers averaged ~310-430 days depending on founding cohort, with observed
+   * maxima of ~1094-1129 days (~3 years); lab workers have lived 4+ years. On natural death an
+   * ant currently respawns as a fresh callow worker at the nest rather than actually vanishing —
+   * a stand-in for real brood-rearing (no queen/egg-laying system exists yet) that keeps colony
+   * population stable instead of slowly declining to zero over a long play session. */
+  antLifespanMinDays: number;
+  antLifespanMaxDays: number;
+
   mapMinX: number;
   mapMinY: number;
   mapMaxX: number;
@@ -153,6 +178,15 @@ export const defaultConfig: SimConfig = {
   antForagingThrottleMin: 0.7,
   antForagingThrottleMax: 1.4,
   antForagingThrottleWarmupRate: 0.02,
+
+  // 5 seconds/day at 60fps: an average worker (~450 days, see antLifespan*) lives roughly
+  // half an hour of continuous play — long enough to be a background presence, not so long
+  // aging/mortality never visibly matters in a normal session
+  framesPerDay: 300,
+  antSizeRangeMm: [3.5, 5.0],
+  antCallowMaturityDays: 5,
+  antLifespanMinDays: 120,
+  antLifespanMaxDays: 1100,
 
   mapMinX: -350,
   mapMinY: -250,
