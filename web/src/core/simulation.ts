@@ -9,10 +9,12 @@ import {
   pause,
   randomInRange,
   respawnAsCallow,
+  taskFound,
   updateActivityCycle,
   updateAnt,
   updateRestingMovement,
 } from './ant';
+import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { UndergroundGrid } from './underground';
@@ -47,8 +49,16 @@ export class Simulation {
   ants: Ant[] = [];
   frame = 0;
   cavePosition: Vector2 = { x: 0, y: 0 };
-  /** Fixed at init (nothing currently moves ants between layers) — cached rather than
-   * recounted every frame since it's used by every underground ant's dig-target check. */
+  queenChamberPosition: Vector2 = { x: 0, y: 0 };
+  queen: Queen = createQueen(this.queenChamberPosition);
+  brood: Brood[] = [];
+  /** Colony-wide stored food, fed by underground-delivered cargo and spent on egg-laying and
+   * larva feeding — see `Simulation.beginUndergroundDelivery`/`updateQueenAndBrood`. */
+  foodStored = 0;
+  /** Roughly how many underground ants exist right now — used by `stepUndergroundAnt`'s dig-
+   * target check. Not perfectly live (ants now dynamically descend/ascend, see
+   * `beginUndergroundDelivery`/`ascendToSurface`), but close enough for a soft growth cap;
+   * updated whenever a descend/ascend actually happens rather than recounted every frame. */
   private undergroundAntCount = 0;
 
   /** Colony-level foraging throttle state — see `SimConfig.antForagingThrottle*`. Fast/slow EMAs
@@ -78,7 +88,12 @@ export class Simulation {
     this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
     this.buildZigzagStressTestMap();
     // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
-    this.undergroundGrid.seedStarterNest(caveGx, caveGy);
+    const { queenChamberXg, queenChamberYg } = this.undergroundGrid.seedStarterNest(caveGx, caveGy);
+    const half = this.config.mapGridSize / 2;
+    this.queenChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(queenChamberXg, queenChamberYg), { x: half, y: half });
+    this.queen = createQueen(this.queenChamberPosition);
+    this.brood = [];
+    this.foodStored = 0;
 
     this.ants = [];
     this.undergroundAntCount = 0;
@@ -89,7 +104,12 @@ export class Simulation {
       // otherwise every ant starts already outside resting range of its own nest
       const position = isUnderground ? { ...this.cavePosition } : add(this.cavePosition, scale(direction, 50 + i / 60));
       const ant = createAnt(this.config, position, direction, 0, isUnderground ? 'underground' : 'surface');
-      if (isUnderground) this.undergroundAntCount++;
+      if (isUnderground) {
+        this.undergroundAntCount++;
+        // staggered, same as every other underground ant — this fixed initial population isn't
+        // a permanent caste, it cycles back to the surface like anyone else (see ascendToSurface)
+        ant.undergroundDutyUntil = Math.round(randomInRange(this.config.antUndergroundDutyDaysRange) * this.config.framesPerDay);
+      }
       // an established colony has a natural mix of ages, not a nursery of identical newborns —
       // sample uniformly up to this ant's own sampled lifespan (most land well past the callow
       // threshold, a few land young, matching a real standing age structure)
@@ -168,6 +188,7 @@ export class Simulation {
     this.caveFoodSignal = this.computeCaveFoodSignal();
     const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
     this.undergroundGrid.ensureDesignatedFrontier(this.config.antUndergroundDesignationPoolSize, targetVolume);
+    this.updateQueenAndBrood();
     this.frame += 1;
   }
 
@@ -177,14 +198,25 @@ export class Simulation {
     respawnAsCallow(ant, this.config, position, direction);
   }
 
-  /** Debugging-phase underground behavior: wander the dug tunnel network, gently steered toward
-   * the nearest currently-designated dig site (real workers head to the active construction
-   * site rather than relying on pure chance to bump into it — without this, digging was so rare
-   * it barely progressed at all), and dig it out on arrival. No pheromones, no rest cycle, no
-   * foraging. Ants bumping into a plain, non-designated wall just turn away; they can't
-   * opportunistically eat through arbitrary dirt (which would eventually destroy the pre-built
-   * nest's interior walls), only ever the colony's current designated growth site(s). */
+  /** Underground behavior. Three modes, checked in order:
+   * 1. Carrying a delivery (`deliveringUnderground`): steer straight for the queen chamber
+   *    and deposit on arrival — see `beginUndergroundDelivery`.
+   * 2. Duty shift over (`frame >= undergroundDutyUntil`, and not mid-delivery): resurface.
+   * 3. Otherwise, debugging-phase filler behavior: wander the dug tunnel network, digging out
+   *    the colony's current designated site(s) if bumped into (see
+   *    `UndergroundGrid.ensureDesignatedFrontier`) — no pheromones, no rest cycle. Ants bumping
+   *    into a plain, non-designated wall just turn away; they can't opportunistically eat
+   *    through arbitrary dirt, only ever the colony's current designated growth site(s). */
   private stepUndergroundAnt(ant: Ant): void {
+    if (ant.deliveringUnderground) {
+      this.stepUndergroundDelivery(ant);
+      return;
+    }
+    if (this.frame >= ant.undergroundDutyUntil) {
+      this.ascendToSurface(ant);
+      return;
+    }
+
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
 
@@ -211,6 +243,122 @@ export class Simulation {
     } else {
       // genuinely blocked by a static, non-diggable wall — turn away
       ant.direction = fromAngle(Math.random() * Math.PI * 2);
+    }
+  }
+
+  /** Steers an ant carrying a delivery straight toward the queen chamber and deposits on
+   * arrival. Simple direct steering rather than real pathfinding — fine given the starter
+   * nest's simple, mostly-linear trunk-and-branches shape; a wall in the way just deflects the
+   * heading rather than getting the ant stuck. */
+  /** Follows the precomputed waypoint route to the queen chamber (see
+   * `beginUndergroundDelivery`) one leg at a time, rather than steering straight at the final
+   * target — a direct line usually cuts through undug walls the moment the target isn't a
+   * straight shot away (down a corridor, then around a corner into a branch chamber, say),
+   * which is the normal case here. */
+  private stepUndergroundDelivery(ant: Ant): void {
+    const speed = this.config.antUndergroundSpeed;
+
+    if (ant.deliveryPath.length === 0) {
+      // no route (already arrived, or the chamber was unreachable) — deposit in place
+      ant.cargo.count = 0;
+      ant.deliveringUnderground = false;
+      this.foodStored += 1;
+      return;
+    }
+
+    const waypoint = ant.deliveryPath[0];
+    // steer from this cell's own center, not the ant's raw (possibly off-center) position —
+    // keeps the intended heading exactly aligned with the corridor (often just 1 cell wide)
+    // instead of occasionally clipping a corner wall when the ant isn't perfectly centered
+    const [cxg, cyg] = this.undergroundGrid.worldToGrid(ant.position.x, ant.position.y);
+    const half = this.config.mapGridSize / 2;
+    const cellCenter = add(this.undergroundGrid.gridToWorldOrigin(cxg, cyg), { x: half, y: half });
+    const toward = directionTo(cellCenter, waypoint, ant.direction);
+
+    // try the ideal heading, then progressively wider deviations either side, so a single
+    // blocked frame can't freeze the ant solid recomputing the exact same blocked heading
+    // forever (position and target unchanged -> same "toward" -> same block, every frame)
+    const deviations = [0, 0.3, -0.3, 0.7, -0.7, 1.2, -1.2];
+    for (const angle of deviations) {
+      const candidate = rotate(toward, angle);
+      const nextPosition = add(ant.position, scale(candidate, speed));
+      if (this.undergroundGrid.canPass(nextPosition)) {
+        ant.direction = candidate;
+        ant.position = nextPosition;
+        ant.traveled += speed;
+        break;
+      }
+    }
+
+    // generous arrival tolerance, scaled to the grid cell itself (not to per-frame speed, which
+    // was tight enough — well under 1 world unit against 16-unit cells — that the ant could
+    // orbit near a waypoint indefinitely without ever landing precisely inside it)
+    if (distance(ant.position, waypoint) < half) {
+      ant.deliveryPath.shift();
+    }
+  }
+
+  /** A cargo-carrying ant reaching the surface cave descends to physically deliver the food
+   * underground rather than it vanishing at the surface — see `interactionWithCells`. Cargo is
+   * intentionally *not* cleared yet; it clears on arrival at the queen chamber (see
+   * `stepUndergroundDelivery`). */
+  private beginUndergroundDelivery(ant: Ant): void {
+    ant.maxLeadScore = 0;
+    taskFound(ant, this.config, this.frame); // flips lookingFor/nextTask back to 'food' for when it resurfaces
+    ant.layer = 'underground';
+    ant.deliveringUnderground = true;
+    ant.position = { ...this.cavePosition }; // 1:1 coordinates with the surface entrance
+    ant.deliveryPath = this.undergroundGrid.findPath(ant.position, this.queenChamberPosition) ?? [];
+    ant.paused = false;
+    ant.undergroundDutyUntil = this.frame + Math.round(randomInRange(this.config.antUndergroundDutyDaysRange) * this.config.framesPerDay);
+    this.undergroundAntCount++;
+  }
+
+  /** End of an underground duty shift: back to the surface to resume foraging. */
+  private ascendToSurface(ant: Ant): void {
+    const direction = fromAngle(Math.random() * Math.PI * 2);
+    ant.layer = 'surface';
+    ant.position = add(this.cavePosition, scale(direction, 50));
+    ant.direction = direction;
+    ant.speed = 0.1;
+    ant.paused = false;
+    ant.restAt = this.frame + randomInRange(this.config.antActiveDurationRange);
+    this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
+  }
+
+  /** Queen egg-laying and brood (egg/larva/pupa) aging, feeding, and stage transitions. Runs
+   * once per frame after ants have moved. See `SimConfig`'s brood-economy doc comment for the
+   * numbers used and what's a real citation vs. a game-balance approximation. */
+  private updateQueenAndBrood(): void {
+    const cfg = this.config;
+    this.queen.ageDays += 1 / cfg.framesPerDay;
+
+    if (this.frame >= this.queen.nextEggAttemptFrame) {
+      const populationCap = cfg.numAnts * cfg.populationCapMultiplier;
+      if (this.ants.length < populationCap && this.foodStored >= cfg.queenEggFoodCost) {
+        this.foodStored -= cfg.queenEggFoodCost;
+        this.brood.push(createEgg(this.queen.position));
+        this.queen.nextEggAttemptFrame = this.frame + randomInRange(cfg.queenEggCooldownFramesRange);
+      } else {
+        this.queen.nextEggAttemptFrame = this.frame + cfg.queenEggRetryFrames;
+      }
+    }
+
+    for (let i = this.brood.length - 1; i >= 0; i--) {
+      const b = this.brood[i];
+      advanceBroodAge(b, cfg);
+      if (b.stage === 'larva') {
+        this.foodStored -= feedLarva(b, cfg, this.foodStored);
+      }
+      if (tryAdvanceBroodStage(b, cfg)) {
+        // pupa ready to eclose: remove from brood, spawn a fresh callow worker in its place
+        this.brood.splice(i, 1);
+        const direction = fromAngle(Math.random() * Math.PI * 2);
+        const newAnt = createAnt(cfg, b.position, direction, 0, 'underground');
+        newAnt.undergroundDutyUntil = this.frame + Math.round(randomInRange(cfg.antUndergroundDutyDaysRange) * cfg.framesPerDay);
+        this.ants.push(newAnt);
+        this.undergroundAntCount++;
+      }
     }
   }
 
@@ -257,6 +405,7 @@ export class Simulation {
   private stepAnt(ant: Ant): void {
     this.grid.resolveBlockingCollisionAndMove(ant, this.frame);
     this.interactionWithCells(ant);
+    if (ant.layer === 'underground') return; // just descended — the rest of this is surface-only
 
     // 'flow' needs to deposit every frame — a trail only reads as a spatially continuous line
     // if ants lay it densely as they walk, unlike 'legacy'/'gradient''s sparse "check in every
@@ -279,6 +428,9 @@ export class Simulation {
 
     if (cell.type === 'cave' && ant.lookingFor === 'cave') {
       this.deliveriesThisFrame++; // about to complete a food->cave round trip
+      ant.lastTimeSeen.cave = this.frame;
+      this.beginUndergroundDelivery(ant); // physically carries the food down rather than it vanishing here
+      return;
     }
     cell.affectAnt(ant, { frame: this.frame, config: this.config });
     if (cell.type === 'food' || cell.type === 'cave') {

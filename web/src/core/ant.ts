@@ -68,6 +68,19 @@ export interface Ant {
 
   /** Which overlay this ant currently lives/acts on. */
   layer: AntLayer;
+  /** Frame this ant should resurface, if currently underground on a temporary duty shift
+   * (descended carrying food, or reassigned to help dig/tend brood) rather than permanently
+   * assigned there. Ignored while `layer === 'surface'`. */
+  undergroundDutyUntil: number;
+  /** True while an underground ant is en route to deposit cargo at the queen chamber/food
+   * store — gates the "seek the chamber" steering in `Simulation.stepUndergroundAnt` so ants
+   * without a delivery just wander/dig normally instead of all beelining for one spot. */
+  deliveringUnderground: boolean;
+  /** Remaining waypoints (world-space dug-tunnel cell centers) to the delivery target, computed
+   * once via `UndergroundGrid.findPath` when `deliveringUnderground` starts — a straight line to
+   * the target usually cuts through undug walls, so the ant follows this route step by step
+   * instead. Empty when not delivering. */
+  deliveryPath: Vector2[];
 
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
@@ -114,6 +127,9 @@ export function createAnt(
     maxSpeed: cfg.antMaxSpeed,
 
     layer,
+    undergroundDutyUntil: -1,
+    deliveringUnderground: false,
+    deliveryPath: [],
 
     lookingFor: 'food',
     nextTask: 'cave',

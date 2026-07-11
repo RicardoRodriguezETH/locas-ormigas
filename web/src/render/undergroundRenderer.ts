@@ -1,4 +1,4 @@
-import { Container, type Application, Sprite } from 'pixi.js';
+import { Container, Graphics, type Application, Sprite } from 'pixi.js';
 import type { Camera } from '../core/camera';
 import { dirToRad, walkFrame, type Ant } from '../core/ant';
 import type { Simulation } from '../core/simulation';
@@ -24,7 +24,9 @@ export class UndergroundRenderer {
   private readonly worldContainer = new Container();
   private readonly groundContainer = new Container();
   private readonly cellContainer = new Container();
+  private readonly broodLayer = new Graphics();
   private readonly antContainer = new Container();
+  private readonly queenSprite: Sprite;
 
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly antSprites = new Map<Ant, Sprite>();
@@ -35,13 +37,13 @@ export class UndergroundRenderer {
     this.textures = textures;
     this.camera = camera;
 
-    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.antContainer);
+    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.broodLayer, this.antContainer);
     this.app.stage.addChild(this.worldContainer);
     this.worldContainer.visible = false;
 
     this.buildGroundTiles();
     this.buildEntranceMarker();
-    this.buildAntSprites();
+    this.queenSprite = this.buildQueenSprite();
   }
 
   set visible(value: boolean) {
@@ -86,17 +88,26 @@ export class UndergroundRenderer {
     this.cellContainer.addChild(sprite);
   }
 
-  private buildAntSprites(): void {
-    for (const ant of this.sim.ants) {
-      if (ant.layer !== 'underground') continue;
-      const sprite = new Sprite(this.textures.antWalk[0]);
-      sprite.anchor.set(0.5);
-      sprite.scale.set(IMG_SCALE);
-      sprite.x = ant.position.x;
-      sprite.y = ant.position.y;
-      this.antContainer.addChild(sprite);
-      this.antSprites.set(ant, sprite);
-    }
+  /** No dedicated queen sprite exists — improvised as a scaled-up, gold-tinted worker sprite.
+   * Flagging clearly: this is a placeholder, not real art. */
+  private buildQueenSprite(): Sprite {
+    const sprite = new Sprite(this.textures.antWalk[0]);
+    sprite.anchor.set(0.5);
+    sprite.scale.set(IMG_SCALE * 2.2);
+    sprite.tint = 0xffd700;
+    this.antContainer.addChild(sprite);
+    return sprite;
+  }
+
+  private createAntSprite(ant: Ant): Sprite {
+    const sprite = new Sprite(this.textures.antWalk[0]);
+    sprite.anchor.set(0.5);
+    sprite.scale.set(IMG_SCALE);
+    sprite.x = ant.position.x;
+    sprite.y = ant.position.y;
+    this.antContainer.addChild(sprite);
+    this.antSprites.set(ant, sprite);
+    return sprite;
   }
 
   private syncGroundTiles(): void {
@@ -113,12 +124,49 @@ export class UndergroundRenderer {
   }
 
   private syncAnts(): void {
-    for (const [ant, sprite] of this.antSprites) {
+    const underground = new Set<Ant>();
+    for (const ant of this.sim.ants) {
+      if (ant.layer !== 'underground') continue;
+      underground.add(ant);
+
+      const sprite = this.antSprites.get(ant) ?? this.createAntSprite(ant);
       sprite.x = ant.position.x;
       sprite.y = ant.position.y;
       sprite.rotation = dirToRad(ant);
       sprite.texture = this.textures.antWalk[walkFrame(ant)];
       sprite.tint = (ant.color[0] << 16) | (ant.color[1] << 8) | ant.color[2];
+    }
+
+    // tear down sprites for ants that left this layer (resurfaced)
+    for (const [ant, sprite] of this.antSprites) {
+      if (underground.has(ant)) continue;
+      this.antContainer.removeChild(sprite);
+      sprite.destroy({ children: true });
+      this.antSprites.delete(ant);
+    }
+  }
+
+  private syncQueen(): void {
+    this.queenSprite.x = this.sim.queen.position.x;
+    this.queenSprite.y = this.sim.queen.position.y;
+  }
+
+  /** No dedicated egg/larva/pupa sprites exist either — improvised as small colored circles:
+   * pale/white for eggs (matches their real translucent-white look), cream for larvae (slightly
+   * larger — larvae visibly grow), golden-brown for pupae (real cocoons are this color). Redrawn
+   * fresh each frame like the surface pheromone overlay, since brood count/stage changes often. */
+  private syncBrood(): void {
+    this.broodLayer.clear();
+    for (const b of this.sim.brood) {
+      const { x, y } = b.position;
+      if (b.stage === 'egg') {
+        this.broodLayer.circle(x, y, 1.2).fill({ color: 0xf5f5f0, alpha: 0.9 });
+      } else if (b.stage === 'larva') {
+        const growth = Math.min(1, b.ageDays / this.sim.config.larvaDurationDays);
+        this.broodLayer.ellipse(x, y, 1.5 + growth, 2.5 + growth * 2).fill({ color: 0xf0e0a0, alpha: 0.9 });
+      } else {
+        this.broodLayer.ellipse(x, y, 2, 3.5).fill({ color: 0xc9973f, alpha: 0.95 });
+      }
     }
   }
 
@@ -131,6 +179,8 @@ export class UndergroundRenderer {
     this.worldContainer.scale.set(s);
 
     this.syncGroundTiles();
+    this.syncQueen();
+    this.syncBrood();
     this.syncAnts();
   }
 }

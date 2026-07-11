@@ -155,6 +155,41 @@ export interface SimConfig {
    * nest boundary at once (see `UndergroundGrid.ensureDesignatedFrontier`). */
   antUndergroundDesignationPoolSize: number;
 
+  /** Colony food economy and reproduction. Egg/larva/pupa durations are grounded in "eggs
+   * develop to imagines in 8-10 weeks" (AntWiki); the split between the three stages within
+   * that total, and every food-cost/rate number here, is a game-balance approximation, not a
+   * cited figure — no source gave per-stage durations or feeding rates for L. niger specifically.
+   *
+   * Real ant colonies constantly relocate eggs/larvae/pupae between chambers by temperature/
+   * humidity need (brood transport) - not modeled here; brood stays where it's laid. */
+  eggDurationDays: number;
+  /** Larvae need both age *and* accumulated feeding (`larvaNutritionNeeded`) to pupate — well-
+   * fed brood develops faster in reality, but here it's a hard gate: underfed larvae just wait. */
+  larvaDurationDays: number;
+  larvaNutritionNeeded: number;
+  /** Nutrition/frame a larva receives for free whenever `foodStored` is available (a stand-in
+   * for individual nurse-ant feeding trips — the colony-level food flow is real and meaningful,
+   * but this skips animating a specific worker carrying food to a specific larva). Costs
+   * `foodStored` at the same rate (1 food unit = 1 nutrition unit). */
+  larvaFeedRatePerFrame: number;
+  pupaDurationDays: number;
+  /** [min, max] frames between the queen's egg-laying attempts. Each attempt costs
+   * `queenEggFoodCost` from `foodStored`; if there isn't enough, she just waits and retries
+   * `queenEggRetryFrames` later rather than skipping a full cycle. */
+  queenEggCooldownFramesRange: [number, number];
+  queenEggFoodCost: number;
+  queenEggRetryFrames: number;
+  /** The queen stops laying once the colony reaches this multiple of its starting population —
+   * a simple cap so the new real reproduction pipeline (on top of the existing natural-death
+   * respawn safety net) can't grow the colony unboundedly. */
+  populationCapMultiplier: number;
+
+  /** A cargo-carrying ant reaching the surface cave always descends to physically deliver the
+   * food to underground storage rather than it vanishing at the surface — the two layers are
+   * one colony, not two disconnected populations. `antUndergroundDutyDaysRange` is how long it
+   * then stays below (helping dig/tend brood) before resurfacing to forage again. */
+  antUndergroundDutyDaysRange: [number, number];
+
   mapMinX: number;
   mapMinY: number;
   mapMaxX: number;
@@ -216,6 +251,18 @@ export const defaultConfig: SimConfig = {
   antUndergroundDigChance: 0.05,
   antUndergroundVolumePerAnt: 3,
   antUndergroundDesignationPoolSize: 5,
+
+  // 12 + 26 + 18 = 56 days total egg-to-adult, matching the cited 8-10 week (56-70 day) range
+  eggDurationDays: 12,
+  larvaDurationDays: 26,
+  larvaNutritionNeeded: 8,
+  larvaFeedRatePerFrame: 0.01,
+  pupaDurationDays: 18,
+  queenEggCooldownFramesRange: [200, 500],
+  queenEggFoodCost: 5,
+  queenEggRetryFrames: 60,
+  populationCapMultiplier: 1.3,
+  antUndergroundDutyDaysRange: [1, 3],
 
   mapMinX: -350,
   mapMinY: -250,

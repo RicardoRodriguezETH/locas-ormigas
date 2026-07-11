@@ -101,4 +101,40 @@ describe('UndergroundGrid', () => {
     expect(grid.get(xg, yg).dug).toBe(true);
     expect(grid.canDig(xg, yg)).toBe(false); // dug, not "still diggable"
   });
+
+  it('findPath() returns an empty path when start and target are the same cell', () => {
+    const grid = new UndergroundGrid(defaultConfig);
+    grid.dig(0, 0);
+    const origin = grid.gridToWorldOrigin(0, 0);
+    const center = { x: origin.x + defaultConfig.mapGridSize / 2, y: origin.y + defaultConfig.mapGridSize / 2 };
+    expect(grid.findPath(center, center)).toEqual([]);
+  });
+
+  it('findPath() returns null when the target is unreachable', () => {
+    const grid = new UndergroundGrid(defaultConfig);
+    grid.digChamber(0, 0, 1);
+    grid.digChamber(20, 20, 1); // disconnected — no tunnel links them
+    const from = grid.gridToWorldOrigin(0, 0);
+    const to = grid.gridToWorldOrigin(20, 20);
+    expect(grid.findPath(from, to)).toBeNull();
+  });
+
+  it("findPath() routes through a corner rather than cutting through undug dirt", () => {
+    const grid = new UndergroundGrid(defaultConfig);
+    // an L-shaped corridor: (0,0) -> (0,5) -> (5,5), single-width, no direct diagonal dug
+    for (let y = 0; y <= 5; y++) grid.dig(0, y);
+    for (let x = 0; x <= 5; x++) grid.dig(x, 5);
+
+    const from = grid.gridToWorldOrigin(0, 0);
+    const to = grid.gridToWorldOrigin(5, 5);
+    const path = grid.findPath(from, to);
+    expect(path).not.toBeNull();
+    // every waypoint must be over dug ground — the whole point is not to cut through walls
+    for (const p of path!) {
+      const [xg, yg] = grid.worldToGrid(p.x, p.y);
+      expect(grid.get(xg, yg).dug).toBe(true);
+    }
+    // 5 steps down + 5 steps right, minus the shared corner cell = 9 distinct waypoints
+    expect(path!.length).toBe(9);
+  });
 });

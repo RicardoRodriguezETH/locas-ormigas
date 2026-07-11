@@ -1,6 +1,6 @@
 import { Container, Graphics, type Application, Sprite, type Texture } from 'pixi.js';
 import { Camera } from '../core/camera';
-import { dirToRad, walkFrame } from '../core/ant';
+import { type Ant, dirToRad, walkFrame } from '../core/ant';
 import type { Cell } from '../core/cells';
 import { PortalCell } from '../core/cells';
 import { readPheromoneFlow, readPheromoneStrength } from '../core/grid';
@@ -32,11 +32,15 @@ export class SimulationRenderer {
 
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly cellSprites = new Map<string, Sprite>();
-  private readonly antSprites: Sprite[] = [];
+  /** Keyed by ant, not index — population isn't fixed anymore (new workers eclose from brood)
+   * and ants can leave this layer entirely (descend underground), so sprites are created
+   * lazily and torn down when an ant is no longer on the surface, rather than a parallel
+   * fixed-size array built once at construction. */
+  private readonly antSprites = new Map<Ant, Sprite>();
   /** Small food icon shown at an ant's mouth while it's carrying cargo. Child of the ant
    * sprite, so it automatically follows its position/rotation — only visibility needs
    * updating per frame. */
-  private readonly cargoSprites: Sprite[] = [];
+  private readonly cargoSprites = new Map<Ant, Sprite>();
 
   showPheromones = false;
 
@@ -58,7 +62,6 @@ export class SimulationRenderer {
     this.app.stage.addChild(this.worldContainer);
 
     this.buildGroundTiles();
-    this.buildAntSprites();
   }
 
   /** Detach and free this renderer's PixiJS objects (e.g. when restarting the simulation with
@@ -89,27 +92,27 @@ export class SimulationRenderer {
     }
   }
 
-  private buildAntSprites(): void {
-    for (const ant of this.sim.ants) {
-      const sprite = new Sprite(this.textures.antWalk[0]);
-      sprite.anchor.set(0.5);
-      sprite.scale.set(IMG_SCALE);
-      sprite.x = ant.position.x;
-      sprite.y = ant.position.y;
+  /** Lazily creates (and returns) the sprite pair for an ant that's newly on this layer. */
+  private createAntSprite(ant: Ant): Sprite {
+    const sprite = new Sprite(this.textures.antWalk[0]);
+    sprite.anchor.set(0.5);
+    sprite.scale.set(IMG_SCALE);
+    sprite.x = ant.position.x;
+    sprite.y = ant.position.y;
 
-      // positioned near the front of the 32px ant texture, in the ant sprite's own local
-      // (pre-scale) space, so it rides along at the mouth as the ant turns
-      const cargoSprite = new Sprite(this.textures.food);
-      cargoSprite.anchor.set(0.5);
-      cargoSprite.scale.set(0.18);
-      cargoSprite.x = 13;
-      cargoSprite.visible = false;
-      sprite.addChild(cargoSprite);
+    // positioned near the front of the 32px ant texture, in the ant sprite's own local
+    // (pre-scale) space, so it rides along at the mouth as the ant turns
+    const cargoSprite = new Sprite(this.textures.food);
+    cargoSprite.anchor.set(0.5);
+    cargoSprite.scale.set(0.18);
+    cargoSprite.x = 13;
+    cargoSprite.visible = false;
+    sprite.addChild(cargoSprite);
 
-      this.antContainer.addChild(sprite);
-      this.antSprites.push(sprite);
-      this.cargoSprites.push(cargoSprite);
-    }
+    this.antContainer.addChild(sprite);
+    this.antSprites.set(ant, sprite);
+    this.cargoSprites.set(ant, cargoSprite);
+    return sprite;
   }
 
   private textureForCell(cell: Cell): Texture {
@@ -163,16 +166,27 @@ export class SimulationRenderer {
   }
 
   private syncAnts(): void {
-    const ants = this.sim.ants;
-    for (let i = 0; i < ants.length; i++) {
-      const ant = ants[i];
-      const sprite = this.antSprites[i];
+    const onSurface = new Set<Ant>();
+    for (const ant of this.sim.ants) {
+      if (ant.layer !== 'surface') continue;
+      onSurface.add(ant);
+
+      const sprite = this.antSprites.get(ant) ?? this.createAntSprite(ant);
       sprite.x = ant.position.x;
       sprite.y = ant.position.y;
       sprite.rotation = dirToRad(ant);
       sprite.texture = this.textures.antWalk[walkFrame(ant)];
       sprite.tint = (ant.color[0] << 16) | (ant.color[1] << 8) | ant.color[2];
-      this.cargoSprites[i].visible = ant.cargo.count > 0;
+      this.cargoSprites.get(ant)!.visible = ant.cargo.count > 0;
+    }
+
+    // tear down sprites for ants that left this layer (descended underground)
+    for (const [ant, sprite] of this.antSprites) {
+      if (onSurface.has(ant)) continue;
+      this.antContainer.removeChild(sprite);
+      sprite.destroy({ children: true });
+      this.antSprites.delete(ant);
+      this.cargoSprites.delete(ant);
     }
   }
 
