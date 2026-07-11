@@ -4,6 +4,8 @@ import {
   enablePheromonesWrite,
   isComNeeded,
   objectAvoidance,
+  pause,
+  randomInRange,
   updateActivityCycle,
   updateAnt,
   updateRestingMovement,
@@ -49,6 +51,12 @@ export class Simulation {
   foragingThrottle = 1;
   private deliveriesThisFrame = 0;
 
+  /** How strong the food-trail pheromone reads near the cave right now (0-1) — drives
+   * recruitment of resting ants (see `SimConfig.antRecruitmentWakeGain`). Recomputed once per
+   * frame from the just-updated grid, used by the *next* frame's activity-cycle checks (same
+   * one-frame lag as `foragingThrottle`, negligible at 60fps). */
+  caveFoodSignal = 0;
+
   constructor(config: SimConfig = defaultConfig, options: SimulationOptions = {}) {
     this.config = config;
     this.grid = new WorldGrid(config, { randomize: options.randomizeGrid ?? true });
@@ -67,7 +75,14 @@ export class Simulation {
       // spawn clustered around the actual colony entrance, not the unrelated world origin —
       // otherwise every ant starts already outside resting range of its own nest
       const position = add(this.cavePosition, scale(direction, 50 + i / 60));
-      this.ants.push(createAnt(this.config, position, direction));
+      const ant = createAnt(this.config, position, direction);
+      // only a small scouting party starts out foraging — the rest of the colony stays put at
+      // the nest until recruited by a real trail (caveFoodSignal, see update()), with this long
+      // range purely as a fallback so the colony isn't dormant forever if nothing is ever found
+      if (Math.random() >= this.config.antInitialActiveFraction) {
+        pause(ant, 0, randomInRange(this.config.antInitialRestDurationRange));
+      }
+      this.ants.push(ant);
     }
   }
 
@@ -104,7 +119,7 @@ export class Simulation {
 
     for (const ant of this.ants) {
       const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
-      updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle);
+      updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal);
       if (ant.paused) {
         this.stepRestingAnt(ant);
       } else {
@@ -116,7 +131,25 @@ export class Simulation {
     }
 
     this.updateForagingThrottle();
+    this.caveFoodSignal = this.computeCaveFoodSignal();
     this.frame += 1;
+  }
+
+  /** Strength of the 'food' trail in the cave's immediate neighborhood, normalized to [0, 1] —
+   * the strongest reading among the cave cell and its 8 neighbors (same neighborhood ants
+   * themselves scan), algorithm-aware like everything else pheromone-related. */
+  private computeCaveFoodSignal(): number {
+    const [cgx, cgy] = this.grid.worldToGrid(this.cavePosition.x, this.cavePosition.y);
+    const isFlow = this.config.pheromoneAlgorithm === 'flow';
+    const decay = this.config.pheromoneDecayPerFrame;
+
+    let maxStrength = 0;
+    for (const [dx, dy] of GRID_COM_SCAN) {
+      const info = this.grid.get(cgx + dx, cgy + dy).pheromones.food;
+      const strength = isFlow ? length(readPheromoneFlow(info, this.frame, decay)) : readPheromoneStrength(info, this.frame, decay);
+      if (strength > maxStrength) maxStrength = strength;
+    }
+    return Math.min(1, maxStrength / this.config.pheromoneSaturation);
   }
 
   /** Recomputes the fast/slow delivery-rate EMAs from this frame's tally and derives next

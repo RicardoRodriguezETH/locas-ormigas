@@ -53,6 +53,25 @@ export interface SimConfig {
   /** Half-angle (radians) of the field of view used for collision avoidance. */
   antObjectAvoidanceFov: number;
 
+  /** Fraction of the colony that starts out actively foraging; the rest start already resting
+   * at the nest. Without this, the entire colony would lurch out searching simultaneously at
+   * frame 0 regardless of whether anyone has found food yet — this keeps the colony looking
+   * genuinely idle at first, with only a small scouting party out. Everyone else's wake-up is
+   * governed by `antRecruitmentWakeGain` (recruitment via trail strength) and this range only
+   * as an absolute fallback. */
+  antInitialActiveFraction: number;
+  /** [min, max] frames the initially-dormant majority stays resting before its wake-up timer
+   * alone (ignoring recruitment) would fire. Deliberately long — this is a safety net so the
+   * colony doesn't stay dormant forever if no food is ever found, not the primary mechanism;
+   * in practice `antRecruitmentWakeGain` below wakes most of the colony well before this. */
+  antInitialRestDurationRange: [number, number];
+  /** Real ant colonies recruit foragers in proportion to trail pheromone concentration, not on
+   * a blind timer — a strong, fresh trail recruits fast, a weak or absent one recruits nobody
+   * (Deneubourg/Beckers mass-recruitment). Modeled here as a per-frame wake probability for
+   * resting ants: `min(1, cave-adjacent food-trail strength) * antRecruitmentWakeGain`, checked
+   * every frame alongside (not instead of) the fallback duration-timer wake-up. 0 disables
+   * recruitment entirely, falling back to pure timers. */
+  antRecruitmentWakeGain: number;
   /** [min, max] frames an ant stays active before resting again. */
   antActiveDurationRange: [number, number];
   /** [min, max] frames an ant then rests for. Naively, this duty cycle alone would average out
@@ -119,6 +138,9 @@ export const defaultConfig: SimConfig = {
   antObjectAvoidance: true,
   antObjectAvoidanceFov: Math.PI / 6,
 
+  antInitialActiveFraction: 0.15,
+  antInitialRestDurationRange: [2000, 6000],
+  antRecruitmentWakeGain: 0.01,
   antActiveDurationRange: [400, 1000],
   antRestDurationRange: [300, 700],
   antRestTetherRadius: 60,

@@ -136,7 +136,7 @@ export function unpause(ant: Ant): void {
   ant.paused = false;
 }
 
-function randomInRange([min, max]: readonly [number, number]): number {
+export function randomInRange([min, max]: readonly [number, number]): number {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
@@ -145,15 +145,29 @@ function randomInRange([min, max]: readonly [number, number]): number {
  * "wake up" and "go rest" transitions, so `updateAnt` no longer needs to.
  *
  * `eligibleToRest` gates only the *start* of a rest (an ant already out foraging with an empty
- * schedule slot just keeps going until it's actually near the cave and free-handed); waking up
- * is purely time-based so a resting ant never gets stuck resting forever.
+ * schedule slot just keeps going until it's actually near the cave and free-handed).
  *
  * `throttle` is the colony-level foraging throttle (see `SimConfig.antForagingThrottle*`): above
  * 1 it stretches active windows and shrinks rest windows (more of the colony out foraging),
- * below 1 it does the opposite (colony conserving effort). */
-export function updateActivityCycle(ant: Ant, cfg: SimConfig, frame: number, eligibleToRest: boolean, throttle = 1): void {
+ * below 1 it does the opposite (colony conserving effort).
+ *
+ * `recruitmentSignal` is how strong the food trail near the cave currently reads (0-1, see
+ * `Simulation`'s `caveFoodSignal`) — resting ants get a per-frame chance to wake early
+ * proportional to it (`SimConfig.antRecruitmentWakeGain`), on top of the fallback duration
+ * timer, so recruitment tracks real trail evidence rather than a blind clock: no signal means
+ * the fallback timer is the only thing waking anyone up, a strong fresh trail wakes the colony
+ * fast. */
+export function updateActivityCycle(
+  ant: Ant,
+  cfg: SimConfig,
+  frame: number,
+  eligibleToRest: boolean,
+  throttle = 1,
+  recruitmentSignal = 0,
+): void {
   if (ant.paused) {
-    if (frame >= ant.pauseUntil) {
+    const recruited = recruitmentSignal > 0 && Math.random() < recruitmentSignal * cfg.antRecruitmentWakeGain;
+    if (frame >= ant.pauseUntil || recruited) {
       unpause(ant);
       ant.restAt = frame + Math.round(randomInRange(cfg.antActiveDurationRange) * throttle);
     }
