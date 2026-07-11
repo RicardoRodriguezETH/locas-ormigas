@@ -41,7 +41,10 @@ export interface SimConfig {
    * straight, like a recruited real ant. */
   antErraticInformed: number;
   /** Heading jitter while there's no recent pheromone guidance — loopier, undirected search,
-   * like a real scout. */
+   * like a real scout. Kept at the original flat wander rate rather than pushed higher: an
+   * even loopier search covers less net ground per frame, which measurably starves trail
+   * discovery/repair (especially for 'flow', whose whole mechanic depends on continuous
+   * exploration keeping the field alive). */
   antErraticSearching: number;
   /** How long "recently informed" status lasts after last receiving useful pheromone
    * guidance before an ant reverts to searching-style wander. */
@@ -52,9 +55,14 @@ export interface SimConfig {
 
   /** [min, max] frames an ant stays active before resting again. */
   antActiveDurationRange: [number, number];
-  /** [min, max] frames an ant then rests for. Together with the active range, this duty cycle
-   * averages out to roughly 40% of the colony resting at any moment, matching observed real
-   * ant colony inactivity rates (studies report ~40-65% of workers inactive at a given time). */
+  /** [min, max] frames an ant then rests for. Naively, this duty cycle alone would average out
+   * to roughly 40% resting — matching observed real ant colony inactivity rates (studies report
+   * ~40-65% of workers inactive at a given time) — but the eligibility gate below (only cargo-
+   * free ants near the cave may start resting) pulls the realized colony-wide figure down to
+   * roughly 15-20% in practice, since foraging round trips keep most active ants away from the
+   * cave for long stretches. That's a reasonable result given every ant here is a forager (real
+   * colonies' higher inactivity rate includes a large non-foraging worker caste this sim doesn't
+   * model yet); push these ranges further if a lazier colony is wanted. */
   antRestDurationRange: [number, number];
   /** How close to the cave (world units) an ant must be to be eligible to start resting, and
    * how far a resting ant is allowed to mill before being pulled back — real ants rest in and
@@ -106,7 +114,7 @@ export const defaultConfig: SimConfig = {
   antSightDistance: 30,
   antPositionMemorySize: 10,
   antErraticInformed: 0.08,
-  antErraticSearching: 0.32,
+  antErraticSearching: 0.2,
   antInformedWindow: 120,
   antObjectAvoidance: true,
   antObjectAvoidanceFov: Math.PI / 6,

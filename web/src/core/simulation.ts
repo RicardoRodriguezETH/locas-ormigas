@@ -64,7 +64,9 @@ export class Simulation {
     this.ants = [];
     for (let i = 1; i <= numAnts; i++) {
       const direction = fromAngle(Math.random() * Math.PI * 2);
-      const position = scale(direction, 50 + i / 60);
+      // spawn clustered around the actual colony entrance, not the unrelated world origin —
+      // otherwise every ant starts already outside resting range of its own nest
+      const position = add(this.cavePosition, scale(direction, 50 + i / 60));
       this.ants.push(createAnt(this.config, position, direction));
     }
   }

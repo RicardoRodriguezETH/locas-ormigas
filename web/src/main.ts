@@ -58,9 +58,14 @@ async function main(): Promise<void> {
       renderer.camera.scale = previousCamera.scale;
       renderer.camera.contentScale = previousCamera.contentScale;
     } else {
-      renderer.camera.translation = { x: app.renderer.width / 2, y: app.renderer.height / 2 };
       renderer.camera.scale = 2;
       updateContentScale();
+      // center the initial view on the colony entrance, not the unrelated world origin
+      const s = renderer.camera.scale * renderer.camera.contentScale;
+      renderer.camera.translation = {
+        x: app.renderer.width / 2 - sim.cavePosition.x * s,
+        y: app.renderer.height / 2 - sim.cavePosition.y * s,
+      };
     }
   }
 
