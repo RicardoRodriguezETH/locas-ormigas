@@ -217,8 +217,13 @@ export class Simulation {
         // depositing (decay is slow relative to traffic) push magnitude into the hundreds,
         // at which point a single ant's fresh deposit (<=1) is too small to ever correct
         // whatever direction got baked in during the early, noisy bootstrap phase.
+        // capping at *4 still let the field drift into an unrecoverable state over 10k+
+        // frames (peaked then decayed back to zero); capping right at pheromoneSaturation —
+        // the point beyond which magnitude does nothing extra for confidence or the overlay
+        // anyway — keeps a single fresh deposit a much larger fraction of the total, so the
+        // field stays meaningfully correctable indefinitely
         const updatedMagnitude = length(updatedFlow);
-        const maxMagnitude = this.config.pheromoneSaturation * 4;
+        const maxMagnitude = this.config.pheromoneSaturation;
         info.flow = updatedMagnitude > maxMagnitude ? scale(updatedFlow, maxMagnitude / updatedMagnitude) : updatedFlow;
         info.lastUpdated = this.frame;
       }

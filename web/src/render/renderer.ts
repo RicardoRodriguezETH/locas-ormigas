@@ -199,7 +199,10 @@ export class SimulationRenderer {
           const intensity = raw * raw; // steeper falloff so weak/ambient signal stays faint
           if (intensity < 0.03) continue;
 
-          const color = interest === 'food' ? 0xfff0c8 : 0xc8c8ff;
+          // warm amber for food, cool cyan for cave — opposite ends of the color wheel so
+          // they stay distinguishable even as faint, low-alpha arrows, and match each
+          // resource's own sprite palette (food is yellow/orange, cave is dark/cool)
+          const color = interest === 'food' ? 0xffa726 : 0x29b6f6;
           const shaftLen = gridSize * 0.15 + gridSize * 0.3 * intensity;
           const tipX = centerX + dirX * shaftLen;
           const tipY = centerY + dirY * shaftLen;
