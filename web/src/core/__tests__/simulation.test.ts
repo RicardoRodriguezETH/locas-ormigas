@@ -77,6 +77,51 @@ describe('Simulation', () => {
     expect(seeker.direction.y).toBeGreaterThan(0);
   });
 
+  it('a fresh ant surrounded by empty cells does not steer toward the world origin', () => {
+    // regression: maxLeadScore starting at -1 let an untouched cell's score of 0 win the
+    // `score > maxLeadScore` gate and snap the heading toward the empty cell's default
+    // `where` of {0,0}
+    const localCfg = { ...cfg, antComEveryFrame: true };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    // placed to the upper-right of the origin, heading further away (east); a phantom pull
+    // toward {0,0} would flip direction.x negative
+    const seeker = createAnt(localCfg, { x: 40, y: 40 }, { x: 1, y: 0 });
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+    seeker.restAt = Infinity; // don't let the rest cycle interfere
+    sim.ants = [seeker];
+    sim.frame = 0;
+    sim.update();
+
+    expect(seeker.maxLeadScore).toBe(0);
+    expect(seeker.direction.x).toBeGreaterThan(0); // still heading away from origin, not snapped toward it
+  });
+
+  it("flow algorithm steers a seeking ant along the deposited flow vector", () => {
+    const localCfg = { ...cfg, pheromoneAlgorithm: 'flow' as const, antComEveryFrame: true };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    // strong eastward 'food' flow across the ant's cell (0,0) and all its neighbors
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const info = sim.grid.get(dx, dy).pheromones.food;
+        info.flow = { x: localCfg.pheromoneSaturation, y: 0 };
+        info.lastUpdated = 0;
+      }
+    }
+
+    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: -1 }); // heading north
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+    seeker.restAt = Infinity;
+    sim.ants = [seeker];
+    sim.frame = 0;
+    sim.update();
+
+    expect(seeker.direction.x).toBeGreaterThan(0); // turned to follow the eastward flow
+  });
+
   it('gradient algorithm favors a freshly-refreshed lead over a stale one, even if both were once equally strong', () => {
     const localCfg = { ...cfg, antComEveryFrame: true };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
@@ -213,6 +258,55 @@ describe('Simulation', () => {
     // otherwise this brood item would stay "beingCarried" forever with no ant actually
     // carrying it, permanently excluded from ever being picked up again
     expect(brood.beingCarried).toBe(false);
+  });
+
+  it('an underground ant that dies of old age respawns underground with a fresh duty timer (not an immediate exit) and its in-flight food is credited', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.init(1);
+
+    const ant = sim.ants[0];
+    ant.layer = 'underground';
+    ant.deliveringUnderground = true;
+    ant.cargo.count = 1; // mid-delivery: food already counted at the cave, not yet at the larder
+    ant.naturalLifespanDays = 1;
+    ant.ageDays = 1; // dies this frame
+    sim.queen.nextEggAttemptFrame = Infinity; // isolate the food credit from queen egg spending
+    const foodBefore = sim.foodStored;
+
+    sim.update();
+
+    // stayed underground with a real duty stint ahead of it, rather than dutyUntil = -1 which
+    // would send the just-born callow straight back out to the surface
+    expect(ant.layer).toBe('underground');
+    expect(ant.undergroundDutyUntil).toBeGreaterThan(sim.frame);
+    expect(ant.deliveringUnderground).toBe(false);
+    // the delivery it was carrying landed instead of vanishing
+    expect(sim.foodStored).toBe(foodBefore + 1);
+  });
+
+  it('defers eclosion of a pupa that crosses its eclosion age while still being carried', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.init(1);
+    const popBefore = sim.ants.length;
+
+    // a pupa already past its eclosion age, but currently in a nurse's mandibles mid-carry
+    const pupa = createEgg({ x: 0, y: 0 });
+    pupa.stage = 'pupa';
+    pupa.ageDays = cfg.pupaDurationDays + 1;
+    pupa.beingCarried = true;
+    sim.brood = [pupa];
+
+    sim.update();
+
+    // must not eclose while carried — that would leave the carrier hauling a freed object
+    expect(sim.brood).toContain(pupa);
+    expect(sim.ants.length).toBe(popBefore);
+
+    // once it's no longer being carried, it ecloses on the next opportunity
+    pupa.beingCarried = false;
+    sim.update();
+    expect(sim.brood).not.toContain(pupa);
+    expect(sim.ants.length).toBe(popBefore + 1);
   });
 
   it('an ant whose duty shift ends walks back to the entrance rather than resurfacing instantly from wherever it is', () => {

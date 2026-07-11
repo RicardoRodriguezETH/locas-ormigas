@@ -138,7 +138,7 @@ export class Simulation {
         this.undergroundAntCount++;
         // staggered, same as every other underground ant — this fixed initial population isn't
         // a permanent caste, it cycles back to the surface like anyone else (see ascendToSurface)
-        ant.undergroundDutyUntil = Math.round(randomInRange(this.config.antUndergroundDutyDaysRange) * this.config.framesPerDay);
+        ant.undergroundDutyUntil = this.randomDutyFrames();
       }
       // an established colony has a natural mix of ages, not a nursery of identical newborns —
       // sample uniformly up to this ant's own sampled lifespan (most land well past the callow
@@ -248,6 +248,17 @@ export class Simulation {
     this.frame += 1;
   }
 
+  /** A length-of-underground-duty-shift in frames, drawn *continuously* across
+   * `antUndergroundDutyDaysRange`. `randomInRange` returns whole integers, so using it for a
+   * 1–3 *day* range then scaling by `framesPerDay` collapses to just {1,2,3}×framesPerDay — fine
+   * for staggered events (deliveries, eclosions happen on varied frames anyway) but at init the
+   * whole underground cohort shares frame 0, so quantized timers make ~a third of them march out
+   * of the hole together in three synchronized waves. A continuous spread avoids that. */
+  private randomDutyFrames(): number {
+    const [min, max] = this.config.antUndergroundDutyDaysRange;
+    return Math.round((min + Math.random() * (max - min)) * this.config.framesPerDay);
+  }
+
   /** Appends one `HistorySample`, dropping the oldest once over `HISTORY_MAX_SAMPLES`. */
   private recordHistorySample(): void {
     this.history.push({
@@ -267,11 +278,23 @@ export class Simulation {
    * (`updateQueenAndBrood`) is what should visibly "produce" new ants at the nest — this is
    * just bookkeeping standing in for one death being offset by one birth. */
   private respawnAtHome(ant: Ant): void {
-    // don't orphan a brood item mid-carry: without this, its `beingCarried` flag would stay
-    // true forever (nothing else ever clears it), permanently excluding it from being picked
-    // up by another nurse
+    // capture/settle in-flight state before respawnAsCallow wipes it:
+    // - don't orphan a brood item mid-carry: without this its `beingCarried` flag stays true
+    //   forever (nothing else clears it), permanently excluding it from being picked up again
     if (ant.carriedBrood) ant.carriedBrood.beingCarried = false;
+    // - a delivery in progress was already counted at the cave (`deliveriesThisFrame`) but only
+    //   credited to `foodStored` on larder arrival; land it here so the food isn't silently lost
+    if (ant.deliveringUnderground && ant.cargo.count > 0) this.foodStored += 1;
+    const wasUnderground = ant.layer === 'underground';
+
     respawnAsCallow(ant, this.config, ant.position, ant.direction);
+
+    // a respawned underground ant gets `undergroundDutyUntil = -1` from createAnt, which would
+    // trip `beginHeadingToSurface` on the very next frame (branch 4) — send the new callow
+    // straight back out to forage. Give it a normal duty stint instead, like init/eclosion do.
+    if (wasUnderground) {
+      ant.undergroundDutyUntil = this.frame + this.randomDutyFrames();
+    }
   }
 
   /** Underground behavior. Five modes, checked in order:
@@ -444,7 +467,7 @@ export class Simulation {
     ant.position = { ...this.cavePosition }; // 1:1 coordinates with the surface entrance
     ant.deliveryPath = this.undergroundGrid.findPath(ant.position, this.larderPosition) ?? [];
     ant.paused = false;
-    ant.undergroundDutyUntil = this.frame + Math.round(randomInRange(this.config.antUndergroundDutyDaysRange) * this.config.framesPerDay);
+    ant.undergroundDutyUntil = this.frame + this.randomDutyFrames();
     this.undergroundAntCount++;
   }
 
@@ -466,12 +489,27 @@ export class Simulation {
     }
   }
 
-  /** Ant has physically reached the entrance: pop out of the hole and resume foraging. */
+  /** Ant has physically reached the entrance: pop out of the hole and resume foraging. Emerges a
+   * short distance out into the open rather than exactly on the cave tile so the colony doesn't
+   * visibly pile up on one point — but only onto a passable tile: an unchecked offset could drop
+   * the ant inside a wall (painted block, randomized rubble, the maze), which `fixTrapped` would
+   * then snap up to 100 units away, a visible teleport. Tries a few directions, falling back to
+   * the cave tile itself (always passable) if the surroundings are boxed in. */
   private ascendToSurface(ant: Ant): void {
-    const direction = fromAngle(Math.random() * Math.PI * 2);
+    let emergePosition = { ...this.cavePosition };
+    let emergeDirection = fromAngle(Math.random() * Math.PI * 2);
+    for (let i = 0; i < 6; i++) {
+      const dir = fromAngle(Math.random() * Math.PI * 2);
+      const candidate = add(this.cavePosition, scale(dir, 50));
+      if (this.grid.canPass(candidate)) {
+        emergePosition = candidate;
+        emergeDirection = dir;
+        break;
+      }
+    }
     ant.layer = 'surface';
-    ant.position = add(this.cavePosition, scale(direction, 50));
-    ant.direction = direction;
+    ant.position = emergePosition;
+    ant.direction = emergeDirection;
     ant.speed = 0.1;
     ant.paused = false;
     ant.headingToSurface = false;
@@ -507,12 +545,16 @@ export class Simulation {
       if (b.stage === 'larva') {
         this.foodStored -= feedLarva(b, cfg, this.foodStored);
       }
-      if (tryAdvanceBroodStage(b, cfg)) {
-        // pupa ready to eclose: remove from brood, spawn a fresh callow worker in its place
+      if (tryAdvanceBroodStage(b, cfg) && !b.beingCarried) {
+        // pupa ready to eclose: remove from brood, spawn a fresh callow worker in its place.
+        // Deferred while `beingCarried` — a pupa can cross its eclosion age mid-transport; if we
+        // removed it here the carrying ant would keep a dangling reference and visibly haul
+        // nothing to the nursery. `tryAdvanceBroodStage` on a ready pupa is idempotent, so it
+        // simply ecloses next frame once the nurse drops it.
         this.brood.splice(i, 1);
         const direction = fromAngle(Math.random() * Math.PI * 2);
         const newAnt = createAnt(cfg, b.position, direction, 0, 'underground');
-        newAnt.undergroundDutyUntil = this.frame + Math.round(randomInRange(cfg.antUndergroundDutyDaysRange) * cfg.framesPerDay);
+        newAnt.undergroundDutyUntil = this.frame + this.randomDutyFrames();
         this.ants.push(newAnt);
         this.undergroundAntCount++;
       }

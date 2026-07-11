@@ -145,4 +145,38 @@ describe('UndergroundGrid', () => {
     // 5 steps down + 5 steps right, minus the shared corner cell = 9 distinct waypoints
     expect(path!.length).toBe(9);
   });
+
+  it('findPath() refuses to cut diagonally across a wall-corner pinch', () => {
+    const grid = new UndergroundGrid(defaultConfig);
+    // two diagonally-adjacent dug cells whose shared orthogonal cells (1,0) and (0,1) are both
+    // undug: stepping (0,0)->(1,1) would pass through the point where two solid corners meet
+    grid.dig(0, 0);
+    grid.dig(1, 1);
+
+    const from = grid.gridToWorldOrigin(0, 0);
+    const to = grid.gridToWorldOrigin(1, 1);
+    // no non-corner-cutting route exists, so it must report unreachable rather than the pinch
+    expect(grid.findPath(from, to)).toBeNull();
+
+    // opening one of the shared orthogonals removes the pinch: the diagonal is now rounding the
+    // corner of a dug cell, not passing between two walls, so it becomes a legitimate route
+    grid.dig(1, 0);
+    const path = grid.findPath(from, to);
+    expect(path).not.toBeNull();
+    expect(path!.length).toBe(1); // the now-legal direct diagonal step
+    const [xg, yg] = grid.worldToGrid(path![0].x, path![0].y);
+    expect([xg, yg]).toEqual([1, 1]);
+  });
+
+  it('dugCount() counts each cell once despite overlapping seed digs', () => {
+    const grid = new UndergroundGrid(defaultConfig);
+    grid.digChamber(0, 0, 2);
+    const afterFirst = grid.dugCount();
+    grid.digChamber(0, 0, 2); // fully overlapping — must not double-count
+    expect(grid.dugCount()).toBe(afterFirst);
+    grid.dig(0, 0); // already dug — no change
+    expect(grid.dugCount()).toBe(afterFirst);
+    grid.dig(10, 10); // a genuinely new, in-bounds cell
+    expect(grid.dugCount()).toBe(afterFirst + 1);
+  });
 });

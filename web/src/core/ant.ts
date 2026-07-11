@@ -34,7 +34,8 @@ export interface Ant {
   lastTimeSeen: Record<Interest, number>;
   /** Score (either raw frame-time for 'legacy', or decayed strength for 'gradient') of the
    * best pheromone lead currently being followed — only switches heading when something
-   * better turns up. Reset to 0 whenever a task completes, making the ant receptive again. */
+   * better turns up. Starts at 0 (an untouched cell scores 0, so it can't win) and resets to 0
+   * whenever a task completes, making the ant receptive again. */
   maxLeadScore: number;
   /** Frame until which this ant counts as "recently informed" by a pheromone trail — walks
    * tight and mostly straight until then, loopier undirected search afterward. Set whenever
@@ -157,7 +158,11 @@ export function createAnt(
     cargo: { count: 0, capacity: 1 },
 
     lastTimeSeen: { food: -1, cave: -1 },
-    maxLeadScore: -1,
+    // 0, not -1: the scored-pheromone gate is `score > maxLeadScore`, and an untouched cell
+    // scores 0 (gradient strength) — starting at -1 would let that 0 win on the ant's very first
+    // communication frame and steer it toward the empty cell's default `where` of {0,0} (the
+    // world origin). 0 matches every other reset point (taskFound, delivery start).
+    maxLeadScore: 0,
     informedUntil: -1,
 
     color: [255, 255, 255],

@@ -47,6 +47,11 @@ export class UndergroundGrid {
   private expansionCandidates = new Set<string>();
   /** Currently-designated (diggable but not yet dug) subset of `expansionCandidates`. */
   private diggableFrontier = new Set<string>();
+  /** Running count of dug cells, maintained in `dig()` so `dugCount()` is O(1) — it's read
+   * every frame (`ensureDesignatedFrontier`, the stats history) and the `cells` map grows toward
+   * full grid area (every `canPass` probe on undug dirt inserts a cell), so a full scan there
+   * would be a real per-frame cost. */
+  private dugCells = 0;
 
   constructor(config: SimConfig) {
     this.config = config;
@@ -90,6 +95,9 @@ export class UndergroundGrid {
   dig(xg: number, yg: number): void {
     if (!this.isInsideGrid(xg, yg)) return;
     const cell = this.get(xg, yg);
+    // only count the false->true transition: `digChamber`/`digTunnel` overlap at seed time, so
+    // the same cell can be dug more than once
+    if (!cell.dug) this.dugCells++;
     cell.dug = true;
     cell.diggable = false;
     const k = this.key(xg, yg);
@@ -224,11 +232,7 @@ export class UndergroundGrid {
   /** Count of excavated tiles, for comparing against a population-proportional target volume
    * (real nest volume grows roughly proportionally with digging population). */
   dugCount(): number {
-    let count = 0;
-    for (const cell of this.cells.values()) {
-      if (cell.dug) count++;
-    }
-    return count;
+    return this.dugCells;
   }
 
   worldToGrid(x: number, y: number): [number, number] {
@@ -271,6 +275,11 @@ export class UndergroundGrid {
         const ny = cy + dy;
         const nk = this.key(nx, ny);
         if (visited.has(nk) || !this.get(nx, ny).dug) continue;
+        // no corner-cutting: a diagonal step is only allowed if at least one of the two shared
+        // orthogonal cells is also dug. Otherwise the straight line between the two cell centers
+        // passes exactly through the point where two solid-dirt corners meet, and an ant
+        // following that waypoint visibly grinds/clips through the wall pinch.
+        if (dx !== 0 && dy !== 0 && !this.get(cx + dx, cy).dug && !this.get(cx, cy + dy).dug) continue;
         visited.add(nk);
         cameFrom.set(nk, this.key(cx, cy));
         queue.push([nx, ny]);
