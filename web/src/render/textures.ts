@@ -10,13 +10,19 @@ export interface Textures {
   grass: Texture;
   portalBlue: Texture[];
   portalOrange: Texture[];
+  queen: Texture;
+  egg: Texture;
+  larva: Texture;
+  pupa: Texture;
 }
 
 export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
   const path = (name: string) => `${baseUrl}/${name}`;
 
-  const [ground, block, antWalk0, antWalk1, antWalk3, food, cave, grass, pb0, pb1, pb2, po0, po1, po2] =
-    await Promise.all([
+  const [
+    ground, block, antWalk0, antWalk1, antWalk3, food, cave, grass, pb0, pb1, pb2, po0, po1, po2,
+    queen, egg, larva, pupa,
+  ] = await Promise.all([
       Assets.load<Texture>(path('ground01.png')),
       Assets.load<Texture>(path('block01.png')),
       Assets.load<Texture>(path('antWalk_01.png')),
@@ -31,6 +37,10 @@ export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
       Assets.load<Texture>(path('portalOrange_00.png')),
       Assets.load<Texture>(path('portalOrange_01.png')),
       Assets.load<Texture>(path('portalOrange_02.png')),
+      Assets.load<Texture>(path('queen.png')),
+      Assets.load<Texture>(path('egg.png')),
+      Assets.load<Texture>(path('larva.png')),
+      Assets.load<Texture>(path('pupa.png')),
     ]);
 
   return {
@@ -43,5 +53,9 @@ export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
     grass,
     portalBlue: [pb0, pb1, pb2],
     portalOrange: [po0, po1, po2],
+    queen,
+    egg,
+    larva,
+    pupa,
   };
 }

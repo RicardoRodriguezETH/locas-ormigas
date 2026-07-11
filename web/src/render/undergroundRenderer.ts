@@ -1,6 +1,7 @@
-import { Container, Graphics, type Application, Sprite } from 'pixi.js';
+import { Container, type Application, Sprite } from 'pixi.js';
 import type { Camera } from '../core/camera';
 import { dirToRad, walkFrame, type Ant } from '../core/ant';
+import type { Brood } from '../core/brood';
 import type { Simulation } from '../core/simulation';
 import type { Textures } from './textures';
 
@@ -24,12 +25,13 @@ export class UndergroundRenderer {
   private readonly worldContainer = new Container();
   private readonly groundContainer = new Container();
   private readonly cellContainer = new Container();
-  private readonly broodLayer = new Graphics();
+  private readonly broodContainer = new Container();
   private readonly antContainer = new Container();
   private readonly queenSprite: Sprite;
 
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly antSprites = new Map<Ant, Sprite>();
+  private readonly broodSprites = new Map<Brood, Sprite>();
 
   constructor(app: Application, sim: Simulation, textures: Textures, camera: Camera) {
     this.app = app;
@@ -37,7 +39,7 @@ export class UndergroundRenderer {
     this.textures = textures;
     this.camera = camera;
 
-    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.broodLayer, this.antContainer);
+    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.broodContainer, this.antContainer);
     this.app.stage.addChild(this.worldContainer);
     this.worldContainer.visible = false;
 
@@ -88,13 +90,10 @@ export class UndergroundRenderer {
     this.cellContainer.addChild(sprite);
   }
 
-  /** No dedicated queen sprite exists — improvised as a scaled-up, gold-tinted worker sprite.
-   * Flagging clearly: this is a placeholder, not real art. */
   private buildQueenSprite(): Sprite {
-    const sprite = new Sprite(this.textures.antWalk[0]);
+    const sprite = new Sprite(this.textures.queen);
     sprite.anchor.set(0.5);
     sprite.scale.set(IMG_SCALE * 2.2);
-    sprite.tint = 0xffd700;
     this.antContainer.addChild(sprite);
     return sprite;
   }
@@ -151,22 +150,43 @@ export class UndergroundRenderer {
     this.queenSprite.y = this.sim.queen.position.y;
   }
 
-  /** No dedicated egg/larva/pupa sprites exist either — improvised as small colored circles:
-   * pale/white for eggs (matches their real translucent-white look), cream for larvae (slightly
-   * larger — larvae visibly grow), golden-brown for pupae (real cocoons are this color). Redrawn
-   * fresh each frame like the surface pheromone overlay, since brood count/stage changes often. */
+  private createBroodSprite(): Sprite {
+    const sprite = new Sprite(this.textures.egg);
+    sprite.anchor.set(0.5);
+    this.broodContainer.addChild(sprite);
+    return sprite;
+  }
+
+  /** Brood items are created (eggs laid) and removed (eclosion) constantly over the colony's
+   * lifetime, so sprites are lazily created/torn down the same way ant sprites are. Larvae grow
+   * visibly with age via scale, matching their real size increase before pupating. */
   private syncBrood(): void {
-    this.broodLayer.clear();
+    const alive = new Set<Brood>();
     for (const b of this.sim.brood) {
-      const { x, y } = b.position;
+      alive.add(b);
+      const sprite = this.broodSprites.get(b) ?? this.createBroodSprite();
+      this.broodSprites.set(b, sprite);
+      sprite.x = b.position.x;
+      sprite.y = b.position.y;
+
       if (b.stage === 'egg') {
-        this.broodLayer.circle(x, y, 1.2).fill({ color: 0xf5f5f0, alpha: 0.9 });
+        sprite.texture = this.textures.egg;
+        sprite.scale.set(IMG_SCALE);
       } else if (b.stage === 'larva') {
         const growth = Math.min(1, b.ageDays / this.sim.config.larvaDurationDays);
-        this.broodLayer.ellipse(x, y, 1.5 + growth, 2.5 + growth * 2).fill({ color: 0xf0e0a0, alpha: 0.9 });
+        sprite.texture = this.textures.larva;
+        sprite.scale.set(IMG_SCALE * (0.7 + growth * 0.5));
       } else {
-        this.broodLayer.ellipse(x, y, 2, 3.5).fill({ color: 0xc9973f, alpha: 0.95 });
+        sprite.texture = this.textures.pupa;
+        sprite.scale.set(IMG_SCALE);
       }
+    }
+
+    for (const [b, sprite] of this.broodSprites) {
+      if (alive.has(b)) continue;
+      this.broodContainer.removeChild(sprite);
+      sprite.destroy({ children: true });
+      this.broodSprites.delete(b);
     }
   }
 
