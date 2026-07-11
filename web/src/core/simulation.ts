@@ -191,20 +191,15 @@ export class Simulation {
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
     const decay = this.config.pheromoneDecayPerFrame;
 
-    let best: Vector2 | null = null;
-    let bestStrength = 0;
+    let pull: Vector2 = { x: 0, y: 0 };
     for (const [dx, dy] of GRID_COM_SCAN) {
       const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
-      const flow = readPheromoneFlow(info, this.frame, decay);
-      const flowStrength = length(flow);
-      if (flowStrength > bestStrength) {
-        bestStrength = flowStrength;
-        best = flow;
-      }
+      pull = add(pull, readPheromoneFlow(info, this.frame, decay));
     }
-    if (best && bestStrength > 0) {
-      const confidence = Math.min(1, bestStrength / this.config.pheromoneSaturation);
-      const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(best, ant.direction), confidence));
+    const strength = length(pull);
+    if (strength > 0) {
+      const confidence = Math.min(1, strength / this.config.pheromoneSaturation);
+      const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(pull, ant.direction), confidence));
       ant.direction = normalize(blended, ant.direction);
     }
 
