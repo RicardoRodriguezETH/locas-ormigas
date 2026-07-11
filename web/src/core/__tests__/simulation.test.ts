@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAnt } from '../ant';
+import { createEgg } from '../brood';
 import { defaultConfig } from '../config';
 import { readPheromoneStrength } from '../grid';
 import { Simulation } from '../simulation';
@@ -191,5 +192,26 @@ describe('Simulation', () => {
     expect(ant.position.x).toBeCloseTo(48 + cfg.mapGridSize / 2, 0);
     expect(ant.position.y).toBeCloseTo(48 + cfg.mapGridSize / 2, 0);
     expect(ant.teleportedOnFrame).toBe(0);
+  });
+
+  it('releases a brood item an ant was carrying if that ant dies of natural causes mid-carry', () => {
+    const sim = new Simulation(cfg, { randomizeGrid: false });
+    sim.init(1);
+
+    const ant = sim.ants[0];
+    ant.layer = 'underground';
+    ant.naturalLifespanDays = 1;
+    ant.ageDays = 1; // already at its sampled lifespan — dies this frame
+
+    const brood = createEgg({ x: 0, y: 0 });
+    brood.beingCarried = true;
+    ant.carriedBrood = brood;
+    sim.brood = [brood];
+
+    sim.update();
+
+    // otherwise this brood item would stay "beingCarried" forever with no ant actually
+    // carrying it, permanently excluded from ever being picked up again
+    expect(brood.beingCarried).toBe(false);
   });
 });

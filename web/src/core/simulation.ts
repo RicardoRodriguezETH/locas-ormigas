@@ -206,6 +206,10 @@ export class Simulation {
    * (`updateQueenAndBrood`) is what should visibly "produce" new ants at the nest — this is
    * just bookkeeping standing in for one death being offset by one birth. */
   private respawnAtHome(ant: Ant): void {
+    // don't orphan a brood item mid-carry: without this, its `beingCarried` flag would stay
+    // true forever (nothing else ever clears it), permanently excluding it from being picked
+    // up by another nurse
+    if (ant.carriedBrood) ant.carriedBrood.beingCarried = false;
     respawnAsCallow(ant, this.config, ant.position, ant.direction);
   }
 

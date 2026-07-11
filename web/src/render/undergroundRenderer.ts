@@ -41,7 +41,10 @@ export class UndergroundRenderer {
     this.textures = textures;
     this.camera = camera;
 
-    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.broodContainer, this.antContainer);
+    // brood after ants: a carried egg/larva/pupa shares the carrying ant's position, and needs
+    // to render on top of it to stay visible rather than getting hidden behind the (larger)
+    // ant sprite for the whole trip to the nursery
+    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.antContainer, this.broodContainer);
     this.app.stage.addChild(this.worldContainer);
     this.worldContainer.visible = false;
 
