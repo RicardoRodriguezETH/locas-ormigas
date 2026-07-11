@@ -33,6 +33,10 @@ export class SimulationRenderer {
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly cellSprites = new Map<string, Sprite>();
   private readonly antSprites: Sprite[] = [];
+  /** Small food icon shown at an ant's mouth while it's carrying cargo. Child of the ant
+   * sprite, so it automatically follows its position/rotation — only visibility needs
+   * updating per frame. */
+  private readonly cargoSprites: Sprite[] = [];
 
   showPheromones = false;
 
@@ -84,8 +88,19 @@ export class SimulationRenderer {
       sprite.scale.set(IMG_SCALE);
       sprite.x = ant.position.x;
       sprite.y = ant.position.y;
+
+      // positioned near the front of the 32px ant texture, in the ant sprite's own local
+      // (pre-scale) space, so it rides along at the mouth as the ant turns
+      const cargoSprite = new Sprite(this.textures.food);
+      cargoSprite.anchor.set(0.5);
+      cargoSprite.scale.set(0.18);
+      cargoSprite.x = 13;
+      cargoSprite.visible = false;
+      sprite.addChild(cargoSprite);
+
       this.antContainer.addChild(sprite);
       this.antSprites.push(sprite);
+      this.cargoSprites.push(cargoSprite);
     }
   }
 
@@ -148,6 +163,7 @@ export class SimulationRenderer {
       sprite.y = ant.position.y;
       sprite.rotation = dirToRad(ant);
       sprite.texture = this.textures.antWalk[walkFrame(ant)];
+      this.cargoSprites[i].visible = ant.cargo.count > 0;
     }
   }
 
@@ -199,10 +215,10 @@ export class SimulationRenderer {
           const intensity = raw * raw; // steeper falloff so weak/ambient signal stays faint
           if (intensity < 0.03) continue;
 
-          // warm amber for food, cool cyan for cave — opposite ends of the color wheel so
-          // they stay distinguishable even as faint, low-alpha arrows, and match each
-          // resource's own sprite palette (food is yellow/orange, cave is dark/cool)
-          const color = interest === 'food' ? 0xffa726 : 0x29b6f6;
+          // vivid magenta for food, vivid cyan for cave — near-complementary hues, both far
+          // enough from the tan/sand ground color to stay readable at low alpha (amber was
+          // too close to the ground's own warm hue and washed out against it)
+          const color = interest === 'food' ? 0xff2d95 : 0x18ffff;
           const shaftLen = gridSize * 0.15 + gridSize * 0.3 * intensity;
           const tipX = centerX + dirX * shaftLen;
           const tipY = centerY + dirY * shaftLen;

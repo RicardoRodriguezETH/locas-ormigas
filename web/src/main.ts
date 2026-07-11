@@ -66,6 +66,8 @@ async function main(): Promise<void> {
 
   startSimulation(defaultConfig.pheromoneAlgorithm);
   window.addEventListener('resize', updateContentScale);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__debug = { getSim: () => sim, getRenderer: () => renderer };
 
   let currentTool: Tool = 'pan';
   const panel = new Panel(panelHost, {
