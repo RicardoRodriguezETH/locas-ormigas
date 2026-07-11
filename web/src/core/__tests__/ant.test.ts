@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../config';
-import { createAnt, isComNeeded, objectAvoidance, storePosition, taskFound, updateAnt } from '../ant';
+import { createAnt, isComNeeded, objectAvoidance, storePosition, taskFound, updateActivityCycle, updateAnt } from '../ant';
 
 describe('ant', () => {
   beforeEach(() => {
@@ -47,19 +47,38 @@ describe('ant', () => {
     expect(isComNeeded(ant, 11)).toBe(false);
   });
 
-  it('accelerates up to max speed each update, and unpauses on schedule', () => {
+  it('accelerates up to max speed each update, and does nothing while paused', () => {
     const ant = createAnt(defaultConfig, { x: 0, y: 0 }, { x: 1, y: 0 });
     ant.speed = 0;
     ant.acceleration = 10;
-    updateAnt(ant, 0);
+    updateAnt(ant);
     expect(ant.speed).toBe(defaultConfig.antMaxSpeed);
 
     ant.paused = true;
-    ant.pauseUntil = 5;
-    updateAnt(ant, 4);
-    expect(ant.paused).toBe(true);
-    updateAnt(ant, 5);
+    ant.speed = 1;
+    updateAnt(ant);
+    expect(ant.speed).toBe(1); // untouched while paused
+  });
+
+  it('duty-cycles between active and resting, staggered so ants do not sync up', () => {
+    const cfg = { ...defaultConfig, antActiveDurationRange: [100, 100] as [number, number], antRestDurationRange: [50, 50] as [number, number] };
+    const ant = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    ant.restAt = 100; // pin the staggered start for a deterministic test
+
+    updateActivityCycle(ant, cfg, 99);
     expect(ant.paused).toBe(false);
+
+    updateActivityCycle(ant, cfg, 100);
+    expect(ant.paused).toBe(true);
+    expect(ant.pauseUntil).toBe(150);
+    expect(ant.speed).toBe(0);
+
+    updateActivityCycle(ant, cfg, 149);
+    expect(ant.paused).toBe(true);
+
+    updateActivityCycle(ant, cfg, 150);
+    expect(ant.paused).toBe(false);
+    expect(ant.restAt).toBe(250); // next active window scheduled from the wake-up frame
   });
 
   it('steers away from an obstacle sensed ahead', () => {

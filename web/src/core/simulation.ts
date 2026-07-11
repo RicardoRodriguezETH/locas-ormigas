@@ -1,4 +1,12 @@
-import { type Ant, createAnt, enablePheromonesWrite, isComNeeded, objectAvoidance, updateAnt } from './ant';
+import {
+  type Ant,
+  createAnt,
+  enablePheromonesWrite,
+  isComNeeded,
+  objectAvoidance,
+  updateActivityCycle,
+  updateAnt,
+} from './ant';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { add, directionTo, fromAngle, length, normalize, scale, type Vector2 } from './vector';
@@ -78,10 +86,11 @@ export class Simulation {
 
   update(): void {
     for (const ant of this.ants) {
+      updateActivityCycle(ant, this.config, this.frame);
       if (!ant.paused) this.stepAnt(ant);
     }
     for (const ant of this.ants) {
-      updateAnt(ant, this.frame);
+      updateAnt(ant);
     }
     this.frame += 1;
   }

@@ -42,6 +42,13 @@ export interface SimConfig {
   /** Half-angle (radians) of the field of view used for collision avoidance. */
   antObjectAvoidanceFov: number;
 
+  /** [min, max] frames an ant stays active before resting again. */
+  antActiveDurationRange: [number, number];
+  /** [min, max] frames an ant then rests for. Together with the active range, this duty cycle
+   * averages out to roughly 40% of the colony resting at any moment, matching observed real
+   * ant colony inactivity rates (studies report ~40-65% of workers inactive at a given time). */
+  antRestDurationRange: [number, number];
+
   mapMinX: number;
   mapMinY: number;
   mapMaxX: number;
@@ -69,6 +76,9 @@ export const defaultConfig: SimConfig = {
   antErratic: 0.2,
   antObjectAvoidance: true,
   antObjectAvoidanceFov: Math.PI / 6,
+
+  antActiveDurationRange: [400, 1000],
+  antRestDurationRange: [300, 700],
 
   mapMinX: -350,
   mapMinY: -250,

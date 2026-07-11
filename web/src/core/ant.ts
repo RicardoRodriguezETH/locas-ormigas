@@ -42,6 +42,9 @@ export interface Ant {
 
   paused: boolean;
   pauseUntil: number;
+  /** Frame this ant should next stop being active and start resting (see
+   * `updateActivityCycle`). Ignored while already paused. */
+  restAt: number;
 
   teleportedOnFrame: number | null;
 
@@ -84,6 +87,8 @@ export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2)
 
     paused: false,
     pauseUntil: -1,
+    // staggered so the whole colony doesn't rest in sync
+    restAt: Math.floor(Math.random() * cfg.antActiveDurationRange[1]),
 
     teleportedOnFrame: null,
 
@@ -122,10 +127,29 @@ export function enablePheromonesWrite(ant: Ant): void {
 export function pause(ant: Ant, frame: number, time: number): void {
   ant.pauseUntil = frame + time;
   ant.paused = true;
+  ant.speed = 0; // waking back up starts slow again, not resuming at cruise speed
 }
 
 export function unpause(ant: Ant): void {
   ant.paused = false;
+}
+
+function randomInRange([min, max]: readonly [number, number]): number {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+/** Duty-cycles an ant between active and resting, independent of what it's doing task-wise —
+ * real ants take breaks even mid-foraging-career. Call once per ant per frame; owns both the
+ * "wake up" and "go rest" transitions, so `updateAnt` no longer needs to. */
+export function updateActivityCycle(ant: Ant, cfg: SimConfig, frame: number): void {
+  if (ant.paused) {
+    if (frame >= ant.pauseUntil) {
+      unpause(ant);
+      ant.restAt = frame + randomInRange(cfg.antActiveDurationRange);
+    }
+  } else if (frame >= ant.restAt) {
+    pause(ant, frame, randomInRange(cfg.antRestDurationRange));
+  }
 }
 
 /** Reached the thing it was looking for: swap goals, reverse course, and go quiet on the
@@ -142,14 +166,12 @@ export function isComNeeded(ant: Ant, frame: number): boolean {
   return (frame + ant.comEveryOffset) % ant.comEvery === 0;
 }
 
-/** Advance speed/heading for one frame. Movement + collision happens separately in the grid. */
-export function updateAnt(ant: Ant, frame: number): void {
+/** Advance speed/heading for one frame. Movement + collision happens separately in the grid.
+ * Pause/rest transitions are handled by `updateActivityCycle`, called separately. */
+export function updateAnt(ant: Ant): void {
   storePosition(ant, ant.position);
 
-  if (ant.paused) {
-    if (frame >= ant.pauseUntil) unpause(ant);
-    return;
-  }
+  if (ant.paused) return;
 
   ant.speed = (ant.speed + ant.acceleration) * ant.friction;
   if (ant.speed > ant.maxSpeed) ant.speed = ant.maxSpeed;

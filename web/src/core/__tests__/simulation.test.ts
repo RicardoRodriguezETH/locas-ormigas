@@ -93,6 +93,7 @@ describe('Simulation', () => {
     const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: 1 });
     seeker.speed = 0;
     seeker.lookingFor = 'food';
+    seeker.restAt = Infinity; // not testing the rest/activity cycle here
     sim.ants = [seeker];
     sim.frame = 2000;
     sim.update();
