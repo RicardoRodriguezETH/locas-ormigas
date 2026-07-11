@@ -40,6 +40,14 @@ export class SimulationRenderer {
 
   showPheromones = false;
 
+  set visible(value: boolean) {
+    this.worldContainer.visible = value;
+  }
+
+  get visible(): boolean {
+    return this.worldContainer.visible;
+  }
+
   constructor(app: Application, sim: Simulation, textures: Textures) {
     this.app = app;
     this.sim = sim;

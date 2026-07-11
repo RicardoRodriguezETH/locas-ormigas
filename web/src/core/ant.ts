@@ -6,6 +6,11 @@ export interface Cargo {
   capacity: number;
 }
 
+/** Which of the two overlays this ant currently lives on. Surface ants run the full
+ * foraging/pheromone/rest pipeline; underground ants run a much simpler dig-and-wander
+ * behavior (see `Simulation.stepUndergroundAnt`) — the two never interact directly yet. */
+export type AntLayer = 'surface' | 'underground';
+
 /** An ant's state. Plain data + free functions, rather than per-instance methods,
  * since thousands of these are updated every frame. */
 export interface Ant {
@@ -61,6 +66,9 @@ export interface Ant {
   comEvery: number;
   comEveryOffset: number;
 
+  /** Which overlay this ant currently lives/acts on. */
+  layer: AntLayer;
+
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
   size: number;
@@ -87,7 +95,13 @@ function sampleLifespanDays(cfg: SimConfig): number {
   return min + (max - min) * Math.random() ** 2;
 }
 
-export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2, initialAgeDays = 0): Ant {
+export function createAnt(
+  cfg: SimConfig,
+  position: Vector2,
+  direction: Vector2,
+  initialAgeDays = 0,
+  layer: AntLayer = 'surface',
+): Ant {
   const pastPositions = Array.from({ length: cfg.antPositionMemorySize }, () => ({ ...position }));
   return {
     position: { ...position },
@@ -98,6 +112,8 @@ export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2,
     friction: 1,
     acceleration: 0.04 + Math.random() * 0.05,
     maxSpeed: cfg.antMaxSpeed,
+
+    layer,
 
     lookingFor: 'food',
     nextTask: 'cave',
@@ -141,9 +157,10 @@ export function advanceAge(ant: Ant, cfg: SimConfig): void {
 /** Natural death, standing in for real brood-rearing (no queen/egg-laying system exists yet):
  * rather than actually removing the ant (which would slowly empty the colony over a long play
  * session with nothing replacing losses), it re-emerges as a fresh callow worker at the nest —
- * new size/lifespan sampled, age reset to 0, task/pheromone/trail state reset like a new spawn. */
+ * new size/lifespan sampled, age reset to 0, task/pheromone/trail state reset like a new spawn.
+ * Stays on whichever layer the ant was already on. */
 export function respawnAsCallow(ant: Ant, cfg: SimConfig, position: Vector2, direction: Vector2): void {
-  Object.assign(ant, createAnt(cfg, position, direction, 0));
+  Object.assign(ant, createAnt(cfg, position, direction, 0, ant.layer));
 }
 
 /** Push `position` into the ring buffer, dropping the oldest remembered position. */

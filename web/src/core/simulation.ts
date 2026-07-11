@@ -15,7 +15,8 @@ import {
 } from './ant';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
-import { add, directionTo, distance, fromAngle, length, normalize, scale, type Vector2 } from './vector';
+import { UndergroundGrid } from './underground';
+import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, type Vector2 } from './vector';
 
 export interface SimulationOptions {
   /** Sprinkle a little random grass/rubble across the map on init. Tests usually want this off. */
@@ -42,9 +43,13 @@ const WALLS: ReadonlyArray<{ x: number; gapAtTop: boolean }> = [
 export class Simulation {
   readonly config: SimConfig;
   readonly grid: WorldGrid;
+  readonly undergroundGrid: UndergroundGrid;
   ants: Ant[] = [];
   frame = 0;
   cavePosition: Vector2 = { x: 0, y: 0 };
+  /** Fixed at init (nothing currently moves ants between layers) — cached rather than
+   * recounted every frame since it's used by every underground ant's dig-target check. */
+  private undergroundAntCount = 0;
 
   /** Colony-level foraging throttle state — see `SimConfig.antForagingThrottle*`. Fast/slow EMAs
    * of colony-wide deliveries/frame; `foragingThrottle` is their clamped ratio, recomputed once
@@ -63,6 +68,7 @@ export class Simulation {
   constructor(config: SimConfig = defaultConfig, options: SimulationOptions = {}) {
     this.config = config;
     this.grid = new WorldGrid(config, { randomize: options.randomizeGrid ?? true });
+    this.undergroundGrid = new UndergroundGrid(config);
   }
 
   init(numAnts: number = this.config.numAnts): void {
@@ -71,14 +77,19 @@ export class Simulation {
     this.grid.seedCell('cave', caveGx, caveGy);
     this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
     this.buildZigzagStressTestMap();
+    // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
+    this.undergroundGrid.seedStarterNest(caveGx, caveGy);
 
     this.ants = [];
+    this.undergroundAntCount = 0;
     for (let i = 1; i <= numAnts; i++) {
+      const isUnderground = Math.random() < this.config.antUndergroundFraction;
       const direction = fromAngle(Math.random() * Math.PI * 2);
       // spawn clustered around the actual colony entrance, not the unrelated world origin —
       // otherwise every ant starts already outside resting range of its own nest
-      const position = add(this.cavePosition, scale(direction, 50 + i / 60));
-      const ant = createAnt(this.config, position, direction);
+      const position = isUnderground ? { ...this.cavePosition } : add(this.cavePosition, scale(direction, 50 + i / 60));
+      const ant = createAnt(this.config, position, direction, 0, isUnderground ? 'underground' : 'surface');
+      if (isUnderground) this.undergroundAntCount++;
       // an established colony has a natural mix of ages, not a nursery of identical newborns —
       // sample uniformly up to this ant's own sampled lifespan (most land well past the callow
       // threshold, a few land young, matching a real standing age structure)
@@ -86,7 +97,7 @@ export class Simulation {
       // only a small scouting party starts out foraging — the rest of the colony stays put at
       // the nest until recruited by a real trail (caveFoodSignal, see update()), with this long
       // range purely as a fallback so the colony isn't dormant forever if nothing is ever found
-      if (Math.random() >= this.config.antInitialActiveFraction) {
+      if (!isUnderground && Math.random() >= this.config.antInitialActiveFraction) {
         pause(ant, 0, randomInRange(this.config.antInitialRestDurationRange));
       }
       this.ants.push(ant);
@@ -129,13 +140,17 @@ export class Simulation {
     for (const ant of this.ants) {
       advanceAge(ant, this.config);
       if (ant.ageDays >= ant.naturalLifespanDays) {
-        const direction = fromAngle(Math.random() * Math.PI * 2);
-        respawnAsCallow(ant, this.config, add(this.cavePosition, scale(direction, 50)), direction);
+        this.respawnAtHome(ant);
       }
 
       const isCallow = getLifeStage(ant, this.config) === 'callow';
       // pale/soft-bodied teneral coloring while callow, full color once mature
       ant.color = isCallow ? [220, 220, 220] : [255, 255, 255];
+
+      if (ant.layer === 'underground') {
+        this.stepUndergroundAnt(ant);
+        continue;
+      }
 
       const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
       updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal, isCallow);
@@ -146,12 +161,47 @@ export class Simulation {
       }
     }
     for (const ant of this.ants) {
-      updateAnt(ant, this.config, this.frame);
+      if (ant.layer === 'surface') updateAnt(ant, this.config, this.frame);
     }
 
     this.updateForagingThrottle();
     this.caveFoodSignal = this.computeCaveFoodSignal();
     this.frame += 1;
+  }
+
+  private respawnAtHome(ant: Ant): void {
+    const direction = fromAngle(Math.random() * Math.PI * 2);
+    const position = ant.layer === 'underground' ? { ...this.cavePosition } : add(this.cavePosition, scale(direction, 50));
+    respawnAsCallow(ant, this.config, position, direction);
+  }
+
+  /** Debugging-phase underground behavior: wander the dug tunnel network, occasionally digging
+   * out adjacent dirt to expand it when blocked — no pheromones, no rest cycle, no foraging.
+   * Digging is capped by `antUndergroundVolumePerAnt` so the nest grows proportionally with the
+   * underground population rather than without bound (see config doc). */
+  private stepUndergroundAnt(ant: Ant): void {
+    const erratic = this.config.antUndergroundErratic;
+    ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
+
+    const speed = this.config.antUndergroundSpeed;
+    const nextPosition = add(ant.position, scale(ant.direction, speed));
+
+    if (this.undergroundGrid.canPass(nextPosition)) {
+      ant.position = nextPosition;
+      ant.traveled += speed;
+      return;
+    }
+
+    const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
+    const canGrow = this.undergroundGrid.dugCount() < targetVolume;
+    if (canGrow && Math.random() < this.config.antUndergroundDigChance) {
+      const [xg, yg] = this.undergroundGrid.worldToGrid(nextPosition.x, nextPosition.y);
+      this.undergroundGrid.dig(xg, yg);
+      ant.position = nextPosition;
+      ant.traveled += speed;
+    } else {
+      ant.direction = fromAngle(Math.random() * Math.PI * 2);
+    }
   }
 
   /** Strength of the 'food' trail in the cave's immediate neighborhood, normalized to [0, 1] —

@@ -4,7 +4,8 @@ import { defaultConfig } from './core/config';
 import { Simulation } from './core/simulation';
 import { SimulationRenderer } from './render/renderer';
 import { loadTextures } from './render/textures';
-import { Panel, type Tool } from './ui/panel';
+import { UndergroundRenderer } from './render/undergroundRenderer';
+import { Panel, type Tool, type ViewLayer } from './ui/panel';
 
 const IDEAL_CONTENT_HEIGHT = 720;
 const NUM_ANTS_DESKTOP = 1500;
@@ -33,15 +34,23 @@ async function main(): Promise<void> {
 
   let sim: Simulation;
   let renderer: SimulationRenderer;
+  let undergroundRenderer: UndergroundRenderer;
   let showPheromones = false;
+  let currentLayer: ViewLayer = 'surface';
 
   const updateContentScale = () => {
     renderer.camera.contentScale = app.renderer.height / IDEAL_CONTENT_HEIGHT;
   };
 
-  /** (Re)creates the simulation and its renderer for the given algorithm, preserving the
+  const applyLayerVisibility = () => {
+    renderer.visible = currentLayer === 'surface';
+    undergroundRenderer.visible = currentLayer === 'underground';
+  };
+
+  /** (Re)creates the simulation and its renderers for the given algorithm, preserving the
    * current camera view when one already exists (so switching algorithms doesn't jolt you
-   * back to the default zoom/pan). */
+   * back to the default zoom/pan). The underground renderer shares the surface renderer's
+   * camera, so panning/zooming stays in sync between the two overlays when toggling. */
   function startSimulation(algorithm: PheromoneAlgorithm): void {
     const previousCamera = renderer?.camera;
 
@@ -50,8 +59,11 @@ async function main(): Promise<void> {
     sim.init(numAnts);
 
     renderer?.destroy();
+    undergroundRenderer?.destroy();
     renderer = new SimulationRenderer(app, sim, textures);
     renderer.showPheromones = showPheromones;
+    undergroundRenderer = new UndergroundRenderer(app, sim, textures, renderer.camera);
+    applyLayerVisibility();
 
     if (previousCamera) {
       renderer.camera.translation = previousCamera.translation;
@@ -87,6 +99,10 @@ async function main(): Promise<void> {
     },
     onAlgorithmChange: (algorithm) => {
       startSimulation(algorithm);
+    },
+    onLayerChange: (layer) => {
+      currentLayer = layer;
+      applyLayerVisibility();
     },
   });
   panel.setSelectedAlgorithm(defaultConfig.pheromoneAlgorithm);
@@ -148,6 +164,7 @@ async function main(): Promise<void> {
   app.ticker.add(() => {
     sim.update();
     renderer.render();
+    undergroundRenderer.render();
     panel.updateStats(app.ticker.FPS, sim.ants.length);
   });
 }

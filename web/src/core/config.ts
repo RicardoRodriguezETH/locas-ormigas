@@ -133,6 +133,24 @@ export interface SimConfig {
   antLifespanMinDays: number;
   antLifespanMaxDays: number;
 
+  /** Fraction of the colony assigned underground as diggers rather than surface foragers — the
+   * same population split into two, not extra ants (see the below-ground overlay). Debugging-
+   * phase behavior only: no queen/brood/food-carrying yet, just excavating the nest. */
+  antUndergroundFraction: number;
+  /** Crawl speed while digging/wandering the tunnel network. */
+  antUndergroundSpeed: number;
+  /** Heading jitter for underground wandering, so tunnels get explored/dug in varied directions
+   * rather than dead-straight lines. */
+  antUndergroundErratic: number;
+  /** Per-frame chance an ant blocked by dirt digs it out (rather than just turning away) —
+   * keeps excavation gradual/visible instead of instant. */
+  antUndergroundDigChance: number;
+  /** Target nest volume (dug tiles) per underground ant — real nest volume grows roughly
+   * proportionally with digging population (Toffin et al. 2010). Digging stops once
+   * `undergroundGrid.dugCount()` reaches `undergroundAntCount * this`, so the nest doesn't grow
+   * unboundedly; a growing/shrinking underground population naturally raises/lowers the target. */
+  antUndergroundVolumePerAnt: number;
+
   mapMinX: number;
   mapMinY: number;
   mapMaxX: number;
@@ -187,6 +205,12 @@ export const defaultConfig: SimConfig = {
   antCallowMaturityDays: 5,
   antLifespanMinDays: 120,
   antLifespanMaxDays: 1100,
+
+  antUndergroundFraction: 0.1,
+  antUndergroundSpeed: 0.4,
+  antUndergroundErratic: 0.5,
+  antUndergroundDigChance: 0.05,
+  antUndergroundVolumePerAnt: 3,
 
   mapMinX: -350,
   mapMinY: -250,

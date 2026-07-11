@@ -2,6 +2,12 @@ import type { PheromoneAlgorithm } from '../core/config';
 import type { PaintableCellType } from '../core/grid';
 
 export type Tool = 'pan' | PaintableCellType;
+export type ViewLayer = 'surface' | 'underground';
+
+const LAYERS: Array<{ layer: ViewLayer; label: string }> = [
+  { layer: 'surface', label: 'Earth' },
+  { layer: 'underground', label: 'Underground' },
+];
 
 const TOOLS: Array<{ tool: Tool; label: string }> = [
   { tool: 'pan', label: 'Pan view' },
@@ -24,6 +30,7 @@ export interface PanelCallbacks {
   onZoom(delta: number): void;
   onTogglePheromones(show: boolean): void;
   onAlgorithmChange(algorithm: PheromoneAlgorithm): void;
+  onLayerChange(layer: ViewLayer): void;
 }
 
 /** The left-hand tool sidebar: cell-painting tools, zoom controls, and live stats. Plain DOM
@@ -35,6 +42,7 @@ export class Panel {
   private readonly algorithmEl: HTMLDivElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly algorithmButtons = new Map<PheromoneAlgorithm, HTMLButtonElement>();
+  private readonly layerButtons = new Map<ViewLayer, HTMLButtonElement>();
 
   constructor(host: HTMLElement, callbacks: PanelCallbacks) {
     host.replaceChildren();
@@ -43,6 +51,23 @@ export class Panel {
     stats.className = 'panel-stats';
     host.appendChild(stats);
     this.statsEl = stats;
+
+    const layerGroup = document.createElement('div');
+    layerGroup.className = 'panel-group panel-row';
+    for (const { layer, label } of LAYERS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-button';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        this.setSelectedLayer(layer);
+        callbacks.onLayerChange(layer);
+      });
+      layerGroup.appendChild(btn);
+      this.layerButtons.set(layer, btn);
+    }
+    host.appendChild(layerGroup);
+    this.setSelectedLayer('surface');
 
     const algorithmLabel = document.createElement('div');
     algorithmLabel.className = 'panel-algorithm';
@@ -110,6 +135,12 @@ export class Panel {
     }
     host.appendChild(algoGroup);
     this.setSelectedAlgorithm('gradient');
+  }
+
+  setSelectedLayer(layer: ViewLayer): void {
+    for (const [l, btn] of this.layerButtons) {
+      btn.classList.toggle('selected', l === layer);
+    }
   }
 
   setSelectedTool(tool: Tool): void {
