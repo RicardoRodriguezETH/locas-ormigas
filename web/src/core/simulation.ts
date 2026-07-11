@@ -1,15 +1,7 @@
-import {
-  type Ant,
-  createAnt,
-  enablePheromonesWrite,
-  headTo,
-  isComNeeded,
-  objectAvoidance,
-  updateAnt,
-} from './ant';
+import { type Ant, createAnt, enablePheromonesWrite, isComNeeded, objectAvoidance, updateAnt } from './ant';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
-import { type PaintableCellType, WorldGrid } from './grid';
-import { fromAngle, scale, type Vector2 } from './vector';
+import { type PaintableCellType, WorldGrid, readPheromoneStrength } from './grid';
+import { directionTo, fromAngle, scale, type Vector2 } from './vector';
 
 export interface SimulationOptions {
   /** Sprinkle a little random grass/rubble across the map on init. Tests usually want this off. */
@@ -79,28 +71,49 @@ export class Simulation {
     }
   }
 
-  /** Ants never talk to each other directly; they read/write "I saw X here at time T" onto
-   * the grid cell they're standing on, and check their 3x3 neighborhood for fresher leads. */
+  /** Ants never talk to each other directly; they leave/read pheromone info on the grid cell
+   * they're standing on. Both algorithms share the same "snap directly to whichever nearby
+   * cell scores best, and only overwrite a cell if you'd raise its score" mechanic — that
+   * decisive, immediate-commitment behavior is what makes it work. They differ only in what
+   * "score" means:
+   *  - 'legacy': raw frame-time. A lead is exactly as good as it ever was until something
+   *    newer replaces it — simple, but stale leads can linger and mislead indefinitely.
+   *  - 'gradient': frame-time run through exponential decay, so a lead quietly loses
+   *    authority the longer it goes unrefreshed, and an ant's own contribution is scaled by
+   *    how recently *it* personally confirmed the resource. This is the one piece of realism
+   *    (evaporation) the original was missing, without touching the mechanic that actually
+   *    makes foraging work. */
   private communicatePheromones(ant: Ant): void {
+    const useDecay = this.config.pheromoneAlgorithm === 'gradient';
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
 
     for (const [dx, dy] of GRID_COM_SCAN) {
-      const seen = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
-      if (seen.time > ant.maxTimeSeen) {
-        ant.maxTimeSeen = seen.time;
-        headTo(ant, seen.where, this.frame);
+      const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
+      const score = useDecay ? readPheromoneStrength(info, this.frame, this.config.pheromoneDecayPerFrame) : info.time;
+      if (score > ant.maxLeadScore) {
+        ant.maxLeadScore = score;
+        ant.direction = directionTo(ant.position, info.where, ant.direction);
       }
     }
 
     if (ant.pheromonesWrite) {
-      const seenHere = this.grid.get(gx, gy).pheromones;
       for (const interest of INTERESTS) {
         const lastSeen = ant.lastTimeSeen[interest];
-        const info = seenHere[interest];
-        if (lastSeen > info.time) {
+        if (lastSeen < 0) continue;
+        const info = this.grid.get(gx, gy).pheromones[interest];
+
+        if (useDecay) {
+          const candidateScore = this.config.pheromoneDecayPerFrame ** (this.frame - lastSeen);
+          const existingScore = readPheromoneStrength(info, this.frame, this.config.pheromoneDecayPerFrame);
+          if (candidateScore <= existingScore) continue;
+          info.strength = candidateScore;
+        } else {
+          if (lastSeen <= info.time) continue;
           info.time = lastSeen;
-          info.where = { ...ant.oldestPositionRemembered };
+          info.strength = this.config.pheromoneDepositAmount; // for the debug overlay only
         }
+        info.lastUpdated = this.frame;
+        info.where = { ...ant.oldestPositionRemembered };
       }
     } else if (this.frame >= ant.pheromonesBackTime) {
       enablePheromonesWrite(ant);

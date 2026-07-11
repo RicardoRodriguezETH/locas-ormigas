@@ -4,7 +4,12 @@ import { CaveCell, type Cell, FoodCell, GrassCell, PortalCell, PortalFactory } f
 import { type Vector2 } from './vector';
 
 export interface PheromoneInfo {
-  /** Frame this interest was last reported near this cell; -1 means never. */
+  /** Concentration as of `lastUpdated`; decays continuously after that — read it with
+   * `readPheromoneStrength` rather than using this field directly. Used by the 'gradient'
+   * algorithm, and kept updated by 'legacy' too so the debug overlay can render either. */
+  strength: number;
+  lastUpdated: number;
+  /** 'legacy' algorithm only: frame this was last reported here; -1 = never. */
   time: number;
   /** World position to head toward to chase this lead. */
   where: Vector2;
@@ -15,6 +20,15 @@ export interface GridCellData {
   pass: boolean;
   cell: Cell | null;
   pheromones: Record<Interest, PheromoneInfo>;
+}
+
+/** Current concentration of a pheromone deposit, decayed for the time elapsed since it was
+ * last topped up. Lazy exponential decay: cheap to read, and needs no per-frame sweep of the
+ * whole grid to "tick down" cells nobody is currently looking at. */
+export function readPheromoneStrength(info: PheromoneInfo, frame: number, decayPerFrame: number): number {
+  const elapsed = frame - info.lastUpdated;
+  if (elapsed <= 0) return info.strength;
+  return info.strength * decayPerFrame ** elapsed;
 }
 
 /** Placeable tile types, as exposed to the UI's cell-painting tool. */
@@ -60,8 +74,8 @@ export class WorldGrid {
       pass: true,
       cell: null,
       pheromones: {
-        food: { time: -1, where: { x: 0, y: 0 } },
-        cave: { time: -1, where: { x: 0, y: 0 } },
+        food: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 } },
+        cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 } },
       },
     };
     if (randomize) {

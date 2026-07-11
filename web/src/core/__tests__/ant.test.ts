@@ -1,14 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../config';
-import {
-  createAnt,
-  headTo,
-  isComNeeded,
-  objectAvoidance,
-  storePosition,
-  taskFound,
-  updateAnt,
-} from '../ant';
+import { createAnt, isComNeeded, objectAvoidance, storePosition, taskFound, updateAnt } from '../ant';
 
 describe('ant', () => {
   beforeEach(() => {
@@ -45,14 +37,6 @@ describe('ant', () => {
     expect(ant.speed).toBe(0);
     expect(ant.pheromonesWrite).toBe(false);
     expect(ant.pheromonesBackTime).toBe(100 + defaultConfig.antPositionMemorySize);
-  });
-
-  it('heads toward a target position', () => {
-    const ant = createAnt(defaultConfig, { x: 0, y: 0 }, { x: 1, y: 0 });
-    headTo(ant, { x: 0, y: 10 }, 42);
-    expect(ant.direction.x).toBeCloseTo(0);
-    expect(ant.direction.y).toBeCloseTo(1);
-    expect(ant.lastTimeUpdatedPath).toBe(42);
   });
 
   it('signals communication need on its own cadence', () => {

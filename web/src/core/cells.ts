@@ -30,7 +30,7 @@ export class FoodCell implements Cell {
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'food') return;
     ant.cargo.count = ant.cargo.capacity;
-    ant.maxTimeSeen = 0;
+    ant.maxLeadScore = 0; // receptive to any lead again for the new goal
     taskFound(ant, ctx.config, ctx.frame);
   }
 }
@@ -41,7 +41,7 @@ export class CaveCell implements Cell {
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'cave') return;
     ant.cargo.count = 0;
-    ant.maxTimeSeen = 0;
+    ant.maxLeadScore = 0; // receptive to any lead again for the new goal
     taskFound(ant, ctx.config, ctx.frame);
   }
 }

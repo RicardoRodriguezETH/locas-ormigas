@@ -3,6 +3,7 @@ import { Camera } from '../core/camera';
 import { dirToRad, walkFrame } from '../core/ant';
 import type { Cell } from '../core/cells';
 import { PortalCell } from '../core/cells';
+import { readPheromoneStrength } from '../core/grid';
 import type { Simulation } from '../core/simulation';
 import type { Textures } from './textures';
 
@@ -46,6 +47,13 @@ export class SimulationRenderer {
 
     this.buildGroundTiles();
     this.buildAntSprites();
+  }
+
+  /** Detach and free this renderer's PixiJS objects (e.g. when restarting the simulation with
+   * a fresh Simulation instance). The underlying `app`/canvas is left alone. */
+  destroy(): void {
+    this.app.stage.removeChild(this.worldContainer);
+    this.worldContainer.destroy({ children: true });
   }
 
   private buildMapBorder(): Graphics {
@@ -143,6 +151,10 @@ export class SimulationRenderer {
     }
   }
 
+  /** Tints each tile by pheromone concentration — a heatmap rather than lines to a
+   * remembered point, since the 'gradient' algorithm has no such point (it steers by
+   * comparing neighboring cells' strength directly, not by recalling a coordinate). Works
+   * the same way for 'legacy', which also stamps strength/lastUpdated for this purpose. */
   private syncPheromoneOverlay(): void {
     this.pheromoneLayer.clear();
     if (!this.showPheromones) return;
@@ -150,15 +162,16 @@ export class SimulationRenderer {
     const { grid, config, frame } = this.sim;
     for (let xg = grid.minXg; xg <= grid.maxXg; xg++) {
       for (let yg = grid.minYg; yg <= grid.maxYg; yg++) {
-        const centerX = xg * config.mapGridSize + config.mapGridSize / 2;
-        const centerY = yg * config.mapGridSize + config.mapGridSize / 2;
         const { pheromones } = grid.get(xg, yg);
         for (const [interest, info] of Object.entries(pheromones)) {
-          if (info.time < 0 || (info.where.x === 0 && info.where.y === 0)) continue;
-          const age = frame - info.time;
-          const alpha = Math.max(0.1, 1 - age / 255);
+          const strength = readPheromoneStrength(info, frame, config.pheromoneDecayPerFrame);
+          if (strength <= 0.05) continue;
+          // saturate visual intensity at the same point trail-following itself saturates
+          const intensity = Math.min(1, strength / config.pheromoneSaturation);
           const color = interest === 'food' ? 0xfff0c8 : 0xc8c8ff;
-          this.pheromoneLayer.moveTo(centerX, centerY).lineTo(info.where.x, info.where.y).stroke({ width: 0.3, color, alpha });
+          this.pheromoneLayer
+            .rect(xg * config.mapGridSize, yg * config.mapGridSize, config.mapGridSize, config.mapGridSize)
+            .fill({ color, alpha: 0.12 + intensity * 0.55 });
         }
       }
     }

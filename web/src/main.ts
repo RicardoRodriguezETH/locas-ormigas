@@ -1,4 +1,5 @@
 import { Application } from 'pixi.js';
+import type { PheromoneAlgorithm } from './core/config';
 import { defaultConfig } from './core/config';
 import { Simulation } from './core/simulation';
 import { SimulationRenderer } from './render/renderer';
@@ -18,9 +19,6 @@ async function main(): Promise<void> {
   const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
   const numAnts = isCoarsePointer ? NUM_ANTS_MOBILE : NUM_ANTS_DESKTOP;
 
-  const sim = new Simulation(defaultConfig);
-  sim.init(numAnts);
-
   const app = new Application();
   await app.init({
     resizeTo: canvasHost,
@@ -32,15 +30,41 @@ async function main(): Promise<void> {
   canvasHost.appendChild(app.canvas);
 
   const textures = await loadTextures('images');
-  const renderer = new SimulationRenderer(app, sim, textures);
 
-  renderer.camera.translation = { x: app.renderer.width / 2, y: app.renderer.height / 2 };
-  renderer.camera.scale = 2;
+  let sim: Simulation;
+  let renderer: SimulationRenderer;
+  let showPheromones = false;
 
   const updateContentScale = () => {
     renderer.camera.contentScale = app.renderer.height / IDEAL_CONTENT_HEIGHT;
   };
-  updateContentScale();
+
+  /** (Re)creates the simulation and its renderer for the given algorithm, preserving the
+   * current camera view when one already exists (so switching algorithms doesn't jolt you
+   * back to the default zoom/pan). */
+  function startSimulation(algorithm: PheromoneAlgorithm): void {
+    const previousCamera = renderer?.camera;
+
+    const cfg = { ...defaultConfig, pheromoneAlgorithm: algorithm };
+    sim = new Simulation(cfg);
+    sim.init(numAnts);
+
+    renderer?.destroy();
+    renderer = new SimulationRenderer(app, sim, textures);
+    renderer.showPheromones = showPheromones;
+
+    if (previousCamera) {
+      renderer.camera.translation = previousCamera.translation;
+      renderer.camera.scale = previousCamera.scale;
+      renderer.camera.contentScale = previousCamera.contentScale;
+    } else {
+      renderer.camera.translation = { x: app.renderer.width / 2, y: app.renderer.height / 2 };
+      renderer.camera.scale = 2;
+      updateContentScale();
+    }
+  }
+
+  startSimulation(defaultConfig.pheromoneAlgorithm);
   window.addEventListener('resize', updateContentScale);
 
   let currentTool: Tool = 'pan';
@@ -53,9 +77,14 @@ async function main(): Promise<void> {
       renderer.camera.zoom(delta);
     },
     onTogglePheromones: (show) => {
+      showPheromones = show;
       renderer.showPheromones = show;
     },
+    onAlgorithmChange: (algorithm) => {
+      startSimulation(algorithm);
+    },
   });
+  panel.setSelectedAlgorithm(defaultConfig.pheromoneAlgorithm);
 
   const paintAt = (clientX: number, clientY: number) => {
     const rect = app.canvas.getBoundingClientRect();

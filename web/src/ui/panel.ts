@@ -1,3 +1,4 @@
+import type { PheromoneAlgorithm } from '../core/config';
 import type { PaintableCellType } from '../core/grid';
 
 export type Tool = 'pan' | PaintableCellType;
@@ -12,10 +13,16 @@ const TOOLS: Array<{ tool: Tool; label: string }> = [
   { tool: 'ground', label: 'Remove' },
 ];
 
+const ALGORITHMS: Array<{ algorithm: PheromoneAlgorithm; label: string }> = [
+  { algorithm: 'legacy', label: 'Legacy' },
+  { algorithm: 'gradient', label: 'Gradient' },
+];
+
 export interface PanelCallbacks {
   onToolChange(tool: Tool): void;
   onZoom(delta: number): void;
   onTogglePheromones(show: boolean): void;
+  onAlgorithmChange(algorithm: PheromoneAlgorithm): void;
 }
 
 /** The left-hand tool sidebar: cell-painting tools, zoom controls, and live stats. Plain DOM
@@ -24,7 +31,9 @@ export class Panel {
   selectedTool: Tool = 'pan';
 
   private readonly statsEl: HTMLDivElement;
+  private readonly algorithmEl: HTMLDivElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
+  private readonly algorithmButtons = new Map<PheromoneAlgorithm, HTMLButtonElement>();
 
   constructor(host: HTMLElement, callbacks: PanelCallbacks) {
     host.replaceChildren();
@@ -33,6 +42,11 @@ export class Panel {
     stats.className = 'panel-stats';
     host.appendChild(stats);
     this.statsEl = stats;
+
+    const algorithmLabel = document.createElement('div');
+    algorithmLabel.className = 'panel-algorithm';
+    host.appendChild(algorithmLabel);
+    this.algorithmEl = algorithmLabel;
 
     const toolGroup = document.createElement('div');
     toolGroup.className = 'panel-group';
@@ -73,6 +87,28 @@ export class Panel {
     pheromoneCheckbox.addEventListener('change', () => callbacks.onTogglePheromones(pheromoneCheckbox.checked));
     pheromoneLabel.append(pheromoneCheckbox, document.createTextNode(' Show pheromones'));
     host.appendChild(pheromoneLabel);
+
+    const algoHeading = document.createElement('div');
+    algoHeading.className = 'panel-heading';
+    algoHeading.textContent = 'Pheromone algorithm';
+    host.appendChild(algoHeading);
+
+    const algoGroup = document.createElement('div');
+    algoGroup.className = 'panel-group panel-row';
+    for (const { algorithm, label } of ALGORITHMS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-button';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        this.setSelectedAlgorithm(algorithm);
+        callbacks.onAlgorithmChange(algorithm);
+      });
+      algoGroup.appendChild(btn);
+      this.algorithmButtons.set(algorithm, btn);
+    }
+    host.appendChild(algoGroup);
+    this.setSelectedAlgorithm('gradient');
   }
 
   setSelectedTool(tool: Tool): void {
@@ -80,6 +116,13 @@ export class Panel {
     for (const [t, btn] of this.toolButtons) {
       btn.classList.toggle('selected', t === tool);
     }
+  }
+
+  setSelectedAlgorithm(algorithm: PheromoneAlgorithm): void {
+    for (const [a, btn] of this.algorithmButtons) {
+      btn.classList.toggle('selected', a === algorithm);
+    }
+    this.algorithmEl.textContent = `Algorithm: ${algorithm}`;
   }
 
   updateStats(fps: number, antCount: number): void {

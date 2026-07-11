@@ -1,5 +1,5 @@
 import type { Interest, SimConfig } from './config';
-import { type Vector2, add, directionTo, rotate, scale } from './vector';
+import { type Vector2, add, rotate, scale } from './vector';
 
 export interface Cargo {
   count: number;
@@ -24,11 +24,13 @@ export interface Ant {
   nextTask: Interest;
   cargo: Cargo;
 
-  /** Frame each interest was last personally observed, used to decide what's worth sharing. */
+  /** Frame each interest was last personally observed; -1 means never. Also gates what this
+   * ant is willing to deposit pheromone about. */
   lastTimeSeen: Record<Interest, number>;
-  /** Age (in frames) of the best pheromone lead currently being followed. */
-  maxTimeSeen: number;
-  lastTimeUpdatedPath: number;
+  /** Score (either raw frame-time for 'legacy', or decayed strength for 'gradient') of the
+   * best pheromone lead currently being followed — only switches heading when something
+   * better turns up. Reset to 0 whenever a task completes, making the ant receptive again. */
+  maxLeadScore: number;
 
   color: readonly [number, number, number];
   lastCollisionTime: number;
@@ -72,8 +74,7 @@ export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2)
     cargo: { count: 0, capacity: 1 },
 
     lastTimeSeen: { food: -1, cave: -1 },
-    maxTimeSeen: -1,
-    lastTimeUpdatedPath: -1,
+    maxLeadScore: -1,
 
     color: [255, 255, 255],
     lastCollisionTime: -1,
@@ -134,12 +135,6 @@ export function taskFound(ant: Ant, cfg: SimConfig, frame: number): void {
   ant.direction = scale(ant.direction, -1);
   ant.speed = 0;
   disablePheromonesWrite(ant, frame, cfg.antPositionMemorySize);
-}
-
-/** Point the ant directly at a world position. */
-export function headTo(ant: Ant, position: Vector2, frame: number): void {
-  ant.direction = directionTo(ant.position, position, ant.direction);
-  ant.lastTimeUpdatedPath = frame;
 }
 
 /** Whether this is one of the frames on which the ant checks/shares pheromone info. */
