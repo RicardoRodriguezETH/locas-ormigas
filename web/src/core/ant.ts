@@ -73,9 +73,10 @@ export interface Ant {
    * (descended carrying food, or reassigned to help dig/tend brood) rather than permanently
    * assigned there. Ignored while `layer === 'surface'`. */
   undergroundDutyUntil: number;
-  /** True while an underground ant is en route to deposit cargo at the queen chamber/food
-   * store — gates the "seek the chamber" steering in `Simulation.stepUndergroundAnt` so ants
-   * without a delivery just wander/dig normally instead of all beelining for one spot. */
+  /** True while an underground ant is en route to deposit cargo at the larder (the colony's
+   * food store, a chamber separate from the queen's) — gates the "seek the chamber" steering in
+   * `Simulation.stepUndergroundAnt` so ants without a delivery just wander/dig normally instead
+   * of all beelining for one spot. */
   deliveringUnderground: boolean;
   /** Remaining waypoints (world-space dug-tunnel cell centers) to the delivery target, computed
    * once via `UndergroundGrid.findPath` when `deliveringUnderground` starts — a straight line to

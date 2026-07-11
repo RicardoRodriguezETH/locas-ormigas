@@ -12,10 +12,8 @@ function tileKey(xg: number, yg: number): string {
 }
 
 /** Draws the below-ground overlay: dug tunnels/chambers vs solid dirt, and the underground
- * ants digging/wandering through them. Deliberately simpler than `SimulationRenderer` — no
- * pheromone overlay, no cargo indicator, no special cell types yet (queen/brood chambers are a
- * later phase). Shares the surface renderer's `Camera` so panning/zooming stays in sync between
- * the two overlays when toggling. */
+ * ants digging/wandering through them. Shares the surface renderer's `Camera` so panning/
+ * zooming stays in sync between the two overlays when toggling. */
 export class UndergroundRenderer {
   private readonly app: Application;
   private readonly sim: Simulation;
@@ -28,9 +26,13 @@ export class UndergroundRenderer {
   private readonly broodContainer = new Container();
   private readonly antContainer = new Container();
   private readonly queenSprite: Sprite;
+  private readonly larderPileSprite: Sprite;
 
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly antSprites = new Map<Ant, Sprite>();
+  /** Small food icon shown at a delivering ant's mouth, mirroring `SimulationRenderer`'s
+   * cargo indicator — otherwise a food delivery in progress looks identical to plain wandering. */
+  private readonly cargoSprites = new Map<Ant, Sprite>();
   private readonly broodSprites = new Map<Brood, Sprite>();
 
   constructor(app: Application, sim: Simulation, textures: Textures, camera: Camera) {
@@ -46,6 +48,7 @@ export class UndergroundRenderer {
     this.buildGroundTiles();
     this.buildEntranceMarker();
     this.queenSprite = this.buildQueenSprite();
+    this.larderPileSprite = this.buildLarderPile();
   }
 
   set visible(value: boolean) {
@@ -98,14 +101,38 @@ export class UndergroundRenderer {
     return sprite;
   }
 
+  /** A visible pile at the larder chamber that grows with `foodStored` — otherwise the colony's
+   * food store is an invisible number with no chamber of its own to look at, and delivering
+   * ants would read as endlessly feeding the queen directly (see `syncLarder`). */
+  private buildLarderPile(): Sprite {
+    const sprite = new Sprite(this.textures.food);
+    sprite.anchor.set(0.5);
+    sprite.x = this.sim.larderPosition.x;
+    sprite.y = this.sim.larderPosition.y;
+    sprite.scale.set(0);
+    this.cellContainer.addChild(sprite);
+    return sprite;
+  }
+
   private createAntSprite(ant: Ant): Sprite {
     const sprite = new Sprite(this.textures.antWalk[0]);
     sprite.anchor.set(0.5);
     sprite.scale.set(IMG_SCALE);
     sprite.x = ant.position.x;
     sprite.y = ant.position.y;
+
+    // positioned near the front of the 32px ant texture, matching the surface renderer's
+    // cargo indicator so the same visual language carries across both overlays
+    const cargoSprite = new Sprite(this.textures.food);
+    cargoSprite.anchor.set(0.5);
+    cargoSprite.scale.set(0.18);
+    cargoSprite.x = 13;
+    cargoSprite.visible = false;
+    sprite.addChild(cargoSprite);
+
     this.antContainer.addChild(sprite);
     this.antSprites.set(ant, sprite);
+    this.cargoSprites.set(ant, cargoSprite);
     return sprite;
   }
 
@@ -134,6 +161,7 @@ export class UndergroundRenderer {
       sprite.rotation = dirToRad(ant);
       sprite.texture = this.textures.antWalk[walkFrame(ant)];
       sprite.tint = (ant.color[0] << 16) | (ant.color[1] << 8) | ant.color[2];
+      this.cargoSprites.get(ant)!.visible = ant.cargo.count > 0;
     }
 
     // tear down sprites for ants that left this layer (resurfaced)
@@ -142,12 +170,22 @@ export class UndergroundRenderer {
       this.antContainer.removeChild(sprite);
       sprite.destroy({ children: true });
       this.antSprites.delete(ant);
+      this.cargoSprites.delete(ant);
     }
   }
 
   private syncQueen(): void {
     this.queenSprite.x = this.sim.queen.position.x;
     this.queenSprite.y = this.sim.queen.position.y;
+  }
+
+  /** Grows the larder pile with `foodStored` (square-root so early deliveries are still
+   * visible rather than the pile staying invisibly tiny for a long warm-up period), capped at
+   * a bit larger than one tile so it doesn't overrun the chamber. */
+  private syncLarder(): void {
+    const { foodStored } = this.sim;
+    const growth = Math.min(1, Math.sqrt(foodStored) / Math.sqrt(150));
+    this.larderPileSprite.scale.set(foodStored > 0.01 ? IMG_SCALE * (0.15 + growth * 0.85) : 0);
   }
 
   private createBroodSprite(): Sprite {
@@ -200,6 +238,7 @@ export class UndergroundRenderer {
 
     this.syncGroundTiles();
     this.syncQueen();
+    this.syncLarder();
     this.syncBrood();
     this.syncAnts();
   }

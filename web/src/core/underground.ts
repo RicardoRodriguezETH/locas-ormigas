@@ -164,15 +164,24 @@ export class UndergroundGrid {
    * immediately rather than an empty seed. Ongoing digging (see `Simulation.stepUndergroundAnt`)
    * extends this spine/branch shape further via `ensureDesignatedFrontier`.
    *
-   * Returns the grid positions of the first two branch chambers: the nearest is designated the
-   * queen's chamber by `Simulation` (shortest food-delivery walk), the next one out is
-   * designated the nursery — a separate chamber for brood to be carried to and reared in,
-   * rather than a growing pile at the queen's feet, matching real colonies keeping egg-laying
-   * and brood-rearing in distinct chambers. */
+   * Returns the grid positions of the first three branch chambers: the nearest is designated
+   * the queen's chamber by `Simulation`, the next one out the nursery (brood is carried there
+   * rather than piling up at the queen's feet), and the third the larder — where foragers
+   * actually deposit delivered food, kept separate from the queen's chamber so the colony's
+   * food store reads as its own place rather than looking like ants feeding the queen directly
+   * and endlessly. All three splits mirror real colonies keeping egg-laying, brood-rearing, and
+   * food storage in distinct chambers. */
   seedStarterNest(
     entranceXg: number,
     entranceYg: number,
-  ): { queenChamberXg: number; queenChamberYg: number; nurseryChamberXg: number; nurseryChamberYg: number } {
+  ): {
+    queenChamberXg: number;
+    queenChamberYg: number;
+    nurseryChamberXg: number;
+    nurseryChamberYg: number;
+    larderChamberXg: number;
+    larderChamberYg: number;
+  } {
     this.digChamber(entranceXg, entranceYg, 1);
 
     const trunkLength = 20;
@@ -189,6 +198,8 @@ export class UndergroundGrid {
     let queenChamberYg = entranceYg;
     let nurseryChamberXg = entranceXg;
     let nurseryChamberYg = entranceYg;
+    let larderChamberXg = entranceXg;
+    let larderChamberYg = entranceYg;
     branches.forEach((branch, i) => {
       const trunkX = entranceXg;
       const trunkY = entranceYg + branch.alongTrunk;
@@ -201,10 +212,13 @@ export class UndergroundGrid {
       } else if (i === 1) {
         nurseryChamberXg = chamberX;
         nurseryChamberYg = trunkY;
+      } else if (i === 2) {
+        larderChamberXg = chamberX;
+        larderChamberYg = trunkY;
       }
     });
 
-    return { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg };
+    return { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg };
   }
 
   /** Count of excavated tiles, for comparing against a population-proportional target volume

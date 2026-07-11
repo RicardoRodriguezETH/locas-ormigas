@@ -51,6 +51,9 @@ export class Simulation {
   cavePosition: Vector2 = { x: 0, y: 0 };
   queenChamberPosition: Vector2 = { x: 0, y: 0 };
   nurseryChamberPosition: Vector2 = { x: 0, y: 0 };
+  /** Where delivering foragers actually walk to and deposit cargo — see `seedStarterNest` doc
+   * comment for why this is a separate chamber from the queen's. */
+  larderPosition: Vector2 = { x: 0, y: 0 };
   queen: Queen = createQueen(this.queenChamberPosition);
   brood: Brood[] = [];
   /** Colony-wide stored food, fed by underground-delivered cargo and spent on egg-laying and
@@ -89,11 +92,12 @@ export class Simulation {
     this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
     this.buildZigzagStressTestMap();
     // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
-    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg } =
+    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg } =
       this.undergroundGrid.seedStarterNest(caveGx, caveGy);
     const half = this.config.mapGridSize / 2;
     this.queenChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(queenChamberXg, queenChamberYg), { x: half, y: half });
     this.nurseryChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(nurseryChamberXg, nurseryChamberYg), { x: half, y: half });
+    this.larderPosition = add(this.undergroundGrid.gridToWorldOrigin(larderChamberXg, larderChamberYg), { x: half, y: half });
     this.queen = createQueen(this.queenChamberPosition);
     this.brood = [];
     this.foodStored = 0;
@@ -195,14 +199,18 @@ export class Simulation {
     this.frame += 1;
   }
 
+  /** Natural-death "safety net" respawn (see `respawnAsCallow`) — stays exactly where the ant
+   * already was rather than resetting to the cave. With a large, aging colony this fires
+   * constantly as a background event; snapping the ant back to the nest read as ants randomly
+   * teleporting/disappearing all over the map. The real reproduction pipeline
+   * (`updateQueenAndBrood`) is what should visibly "produce" new ants at the nest — this is
+   * just bookkeeping standing in for one death being offset by one birth. */
   private respawnAtHome(ant: Ant): void {
-    const direction = fromAngle(Math.random() * Math.PI * 2);
-    const position = ant.layer === 'underground' ? { ...this.cavePosition } : add(this.cavePosition, scale(direction, 50));
-    respawnAsCallow(ant, this.config, position, direction);
+    respawnAsCallow(ant, this.config, ant.position, ant.direction);
   }
 
   /** Underground behavior. Four modes, checked in order:
-   * 1. Carrying a delivery (`deliveringUnderground`): steer straight for the queen chamber
+   * 1. Carrying a delivery (`deliveringUnderground`): steer straight for the larder chamber
    *    and deposit on arrival — see `beginUndergroundDelivery`.
    * 2. Carrying brood (`carriedBrood`): steer for the nursery chamber and settle it there on
    *    arrival — see `tryPickUpBrood`/`stepBroodCarry`. Finishing a carry takes priority over
@@ -353,15 +361,15 @@ export class Simulation {
 
   /** A cargo-carrying ant reaching the surface cave descends to physically deliver the food
    * underground rather than it vanishing at the surface — see `interactionWithCells`. Cargo is
-   * intentionally *not* cleared yet; it clears on arrival at the queen chamber (see
-   * `stepUndergroundDelivery`). */
+   * intentionally *not* cleared yet; it clears on arrival at the larder (see
+   * `stepUndergroundDelivery`), a chamber separate from the queen's — see `seedStarterNest`. */
   private beginUndergroundDelivery(ant: Ant): void {
     ant.maxLeadScore = 0;
     taskFound(ant, this.config, this.frame); // flips lookingFor/nextTask back to 'food' for when it resurfaces
     ant.layer = 'underground';
     ant.deliveringUnderground = true;
     ant.position = { ...this.cavePosition }; // 1:1 coordinates with the surface entrance
-    ant.deliveryPath = this.undergroundGrid.findPath(ant.position, this.queenChamberPosition) ?? [];
+    ant.deliveryPath = this.undergroundGrid.findPath(ant.position, this.larderPosition) ?? [];
     ant.paused = false;
     ant.undergroundDutyUntil = this.frame + Math.round(randomInRange(this.config.antUndergroundDutyDaysRange) * this.config.framesPerDay);
     this.undergroundAntCount++;
