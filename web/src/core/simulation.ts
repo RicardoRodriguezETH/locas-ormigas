@@ -212,7 +212,14 @@ export class Simulation {
         const heading = interest === ant.lookingFor ? ant.direction : scale(ant.direction, -1);
         const info = this.grid.get(gx, gy).pheromones[interest];
         const decayedFlow = readPheromoneFlow(info, this.frame, decay);
-        info.flow = add(decayedFlow, scale(heading, depositAmount));
+        const updatedFlow = add(decayedFlow, scale(heading, depositAmount));
+        // cap magnitude so the field never "freezes": without this, 1500 ants constantly
+        // depositing (decay is slow relative to traffic) push magnitude into the hundreds,
+        // at which point a single ant's fresh deposit (<=1) is too small to ever correct
+        // whatever direction got baked in during the early, noisy bootstrap phase.
+        const updatedMagnitude = length(updatedFlow);
+        const maxMagnitude = this.config.pheromoneSaturation * 4;
+        info.flow = updatedMagnitude > maxMagnitude ? scale(updatedFlow, maxMagnitude / updatedMagnitude) : updatedFlow;
         info.lastUpdated = this.frame;
       }
     } else if (this.frame >= ant.pheromonesBackTime) {
