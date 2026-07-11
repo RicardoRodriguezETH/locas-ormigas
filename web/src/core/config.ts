@@ -37,7 +37,15 @@ export interface SimConfig {
   antSightDistance: number;
   /** How many past positions each ant remembers (used as its pheromone "where"). */
   antPositionMemorySize: number;
-  antErratic: number;
+  /** Heading jitter applied while confidently following a known trail — tight and mostly
+   * straight, like a recruited real ant. */
+  antErraticInformed: number;
+  /** Heading jitter while there's no recent pheromone guidance — loopier, undirected search,
+   * like a real scout. */
+  antErraticSearching: number;
+  /** How long "recently informed" status lasts after last receiving useful pheromone
+   * guidance before an ant reverts to searching-style wander. */
+  antInformedWindow: number;
   antObjectAvoidance: boolean;
   /** Half-angle (radians) of the field of view used for collision avoidance. */
   antObjectAvoidanceFov: number;
@@ -73,7 +81,9 @@ export const defaultConfig: SimConfig = {
   antComNeedFrameStep: [3, 13],
   antSightDistance: 30,
   antPositionMemorySize: 10,
-  antErratic: 0.2,
+  antErraticInformed: 0.08,
+  antErraticSearching: 0.32,
+  antInformedWindow: 120,
   antObjectAvoidance: true,
   antObjectAvoidanceFov: Math.PI / 6,
 

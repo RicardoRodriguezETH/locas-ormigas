@@ -51,12 +51,12 @@ describe('ant', () => {
     const ant = createAnt(defaultConfig, { x: 0, y: 0 }, { x: 1, y: 0 });
     ant.speed = 0;
     ant.acceleration = 10;
-    updateAnt(ant);
+    updateAnt(ant, defaultConfig, 0);
     expect(ant.speed).toBe(defaultConfig.antMaxSpeed);
 
     ant.paused = true;
     ant.speed = 1;
-    updateAnt(ant);
+    updateAnt(ant, defaultConfig, 0);
     expect(ant.speed).toBe(1); // untouched while paused
   });
 
@@ -79,6 +79,23 @@ describe('ant', () => {
     updateActivityCycle(ant, cfg, 150);
     expect(ant.paused).toBe(false);
     expect(ant.restAt).toBe(250); // next active window scheduled from the wake-up frame
+  });
+
+  it('wanders tighter when recently informed, loopier when searching', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1); // maximize rotation so the difference is measurable
+    const cfg = { ...defaultConfig, antErraticInformed: 0.1, antErraticSearching: 0.5 };
+
+    const informed = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    informed.informedUntil = 100;
+    updateAnt(informed, cfg, 0); // frame 0 < informedUntil 100 -> tight wander
+
+    const searching = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    searching.informedUntil = -1;
+    updateAnt(searching, cfg, 0); // frame 0 >= informedUntil -1 -> loopy wander
+
+    const informedAngle = Math.abs(Math.atan2(informed.direction.y, informed.direction.x));
+    const searchingAngle = Math.abs(Math.atan2(searching.direction.y, searching.direction.x));
+    expect(searchingAngle).toBeGreaterThan(informedAngle);
   });
 
   it('steers away from an obstacle sensed ahead', () => {

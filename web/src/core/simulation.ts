@@ -90,7 +90,7 @@ export class Simulation {
       if (!ant.paused) this.stepAnt(ant);
     }
     for (const ant of this.ants) {
-      updateAnt(ant);
+      updateAnt(ant, this.config, this.frame);
     }
     this.frame += 1;
   }
@@ -155,6 +155,7 @@ export class Simulation {
       if (score > ant.maxLeadScore) {
         ant.maxLeadScore = score;
         ant.direction = directionTo(ant.position, info.where, ant.direction);
+        ant.informedUntil = this.frame + this.config.antInformedWindow;
       }
     }
 
@@ -210,6 +211,9 @@ export class Simulation {
       const confidence = Math.min(1, strength / this.config.pheromoneSaturation);
       const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(pull, ant.direction), confidence));
       ant.direction = normalize(blended, ant.direction);
+      if (confidence > 0.3) {
+        ant.informedUntil = this.frame + this.config.antInformedWindow;
+      }
     }
 
     if (ant.pheromonesWrite) {

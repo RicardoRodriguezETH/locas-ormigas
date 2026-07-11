@@ -16,7 +16,6 @@ export interface Ant {
   traveled: number;
   friction: number;
   acceleration: number;
-  erratic: number;
   maxSpeed: number;
 
   /** What this ant is currently seeking: 'food' when empty-handed, 'cave' when carrying food. */
@@ -31,6 +30,10 @@ export interface Ant {
    * best pheromone lead currently being followed — only switches heading when something
    * better turns up. Reset to 0 whenever a task completes, making the ant receptive again. */
   maxLeadScore: number;
+  /** Frame until which this ant counts as "recently informed" by a pheromone trail — walks
+   * tight and mostly straight until then, loopier undirected search afterward. Set whenever
+   * pheromone communication actually updates its heading. */
+  informedUntil: number;
 
   color: readonly [number, number, number];
   lastCollisionTime: number;
@@ -69,7 +72,6 @@ export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2)
     traveled: 0,
     friction: 1,
     acceleration: 0.04 + Math.random() * 0.05,
-    erratic: cfg.antErratic,
     maxSpeed: cfg.antMaxSpeed,
 
     lookingFor: 'food',
@@ -78,6 +80,7 @@ export function createAnt(cfg: SimConfig, position: Vector2, direction: Vector2)
 
     lastTimeSeen: { food: -1, cave: -1 },
     maxLeadScore: -1,
+    informedUntil: -1,
 
     color: [255, 255, 255],
     lastCollisionTime: -1,
@@ -168,7 +171,7 @@ export function isComNeeded(ant: Ant, frame: number): boolean {
 
 /** Advance speed/heading for one frame. Movement + collision happens separately in the grid.
  * Pause/rest transitions are handled by `updateActivityCycle`, called separately. */
-export function updateAnt(ant: Ant): void {
+export function updateAnt(ant: Ant, cfg: SimConfig, frame: number): void {
   storePosition(ant, ant.position);
 
   if (ant.paused) return;
@@ -176,7 +179,10 @@ export function updateAnt(ant: Ant): void {
   ant.speed = (ant.speed + ant.acceleration) * ant.friction;
   if (ant.speed > ant.maxSpeed) ant.speed = ant.maxSpeed;
 
-  ant.direction = rotate(ant.direction, ant.erratic * Math.random() - ant.erratic * 0.5);
+  // tight, mostly-straight wander while recently guided by a trail; loopier, more undirected
+  // search otherwise — like a recruited forager vs. a scout
+  const erratic = frame < ant.informedUntil ? cfg.antErraticInformed : cfg.antErraticSearching;
+  ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
   ant.friction = 1;
 }
 
