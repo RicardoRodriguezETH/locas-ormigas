@@ -150,6 +150,10 @@ export interface SimConfig {
    * `undergroundGrid.dugCount()` reaches `undergroundAntCount * this`, so the nest doesn't grow
    * unboundedly; a growing/shrinking underground population naturally raises/lowers the target. */
   antUndergroundVolumePerAnt: number;
+  /** How many "next dig site" cells stay actively designated (diggable) at once — a small
+   * number keeps expansion to a few controlled working edges rather than opening up the whole
+   * nest boundary at once (see `UndergroundGrid.ensureDesignatedFrontier`). */
+  antUndergroundDesignationPoolSize: number;
 
   mapMinX: number;
   mapMinY: number;
@@ -211,6 +215,7 @@ export const defaultConfig: SimConfig = {
   antUndergroundErratic: 0.5,
   antUndergroundDigChance: 0.05,
   antUndergroundVolumePerAnt: 3,
+  antUndergroundDesignationPoolSize: 5,
 
   mapMinX: -350,
   mapMinY: -250,

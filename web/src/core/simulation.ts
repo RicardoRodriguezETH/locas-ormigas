@@ -166,6 +166,8 @@ export class Simulation {
 
     this.updateForagingThrottle();
     this.caveFoodSignal = this.computeCaveFoodSignal();
+    const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
+    this.undergroundGrid.ensureDesignatedFrontier(this.config.antUndergroundDesignationPoolSize, targetVolume);
     this.frame += 1;
   }
 
@@ -175,10 +177,13 @@ export class Simulation {
     respawnAsCallow(ant, this.config, position, direction);
   }
 
-  /** Debugging-phase underground behavior: wander the dug tunnel network, occasionally digging
-   * out adjacent dirt to expand it when blocked — no pheromones, no rest cycle, no foraging.
-   * Digging is capped by `antUndergroundVolumePerAnt` so the nest grows proportionally with the
-   * underground population rather than without bound (see config doc). */
+  /** Debugging-phase underground behavior: wander the dug tunnel network, gently steered toward
+   * the nearest currently-designated dig site (real workers head to the active construction
+   * site rather than relying on pure chance to bump into it — without this, digging was so rare
+   * it barely progressed at all), and dig it out on arrival. No pheromones, no rest cycle, no
+   * foraging. Ants bumping into a plain, non-designated wall just turn away; they can't
+   * opportunistically eat through arbitrary dirt (which would eventually destroy the pre-built
+   * nest's interior walls), only ever the colony's current designated growth site(s). */
   private stepUndergroundAnt(ant: Ant): void {
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
@@ -192,14 +197,19 @@ export class Simulation {
       return;
     }
 
-    const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
-    const canGrow = this.undergroundGrid.dugCount() < targetVolume;
-    if (canGrow && Math.random() < this.config.antUndergroundDigChance) {
-      const [xg, yg] = this.undergroundGrid.worldToGrid(nextPosition.x, nextPosition.y);
-      this.undergroundGrid.dig(xg, yg);
-      ant.position = nextPosition;
-      ant.traveled += speed;
+    const [xg, yg] = this.undergroundGrid.worldToGrid(nextPosition.x, nextPosition.y);
+    if (this.undergroundGrid.canDig(xg, yg)) {
+      // correctly positioned at a valid dig site — keep the heading and keep trying frame to
+      // frame rather than randomizing away on every failed roll, otherwise an ant that happens
+      // to reach the one designated cell almost never accumulates enough consecutive attempts
+      // to actually win the roll before wandering off again
+      if (Math.random() < this.config.antUndergroundDigChance) {
+        this.undergroundGrid.dig(xg, yg);
+        ant.position = nextPosition;
+        ant.traveled += speed;
+      }
     } else {
+      // genuinely blocked by a static, non-diggable wall — turn away
       ant.direction = fromAngle(Math.random() * Math.PI * 2);
     }
   }

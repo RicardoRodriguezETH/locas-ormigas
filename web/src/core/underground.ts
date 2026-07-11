@@ -4,7 +4,25 @@ import type { Vector2 } from './vector';
 export interface UndergroundCellData {
   /** true = excavated tunnel/chamber (passable); false = solid, undug dirt. */
   dug: boolean;
+  /** true = explicitly designated as the colony's next dig site — the *only* undug cells ants
+   * are allowed to excavate (see `canDig`). Everything else stays a static, permanent wall, so
+   * ants bumping into dirt can't gradually eat through deliberately-placed interior walls (e.g.
+   * between the pre-built starter nest's chambers) the way unrestricted "dig whatever you hit"
+   * would. */
+  diggable: boolean;
 }
+
+/** 8-directional neighbor offsets, matching the filled-disc shape `digChamber` already uses. */
+const NEIGHBOR_OFFSETS: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [-1, 0],
+  [1, 0],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+];
 
 const GRID_BORDER = 2;
 
@@ -23,6 +41,12 @@ export class UndergroundGrid {
   readonly maxYg: number;
 
   private cells = new Map<string, UndergroundCellData>();
+  /** Undug cells adjacent to already-dug space — candidates `ensureDesignatedFrontier` draws
+   * from. Maintained incrementally in `dig()` rather than rescanned, so it stays cheap even as
+   * the nest grows. */
+  private expansionCandidates = new Set<string>();
+  /** Currently-designated (diggable but not yet dug) subset of `expansionCandidates`. */
+  private diggableFrontier = new Set<string>();
 
   constructor(config: SimConfig) {
     this.config = config;
@@ -37,12 +61,12 @@ export class UndergroundGrid {
     return `${xg},${yg}`;
   }
 
-  /** All cells start undug; created lazily on first access rather than pre-filled, since most
-   * of the map will likely never be dug into. */
+  /** All cells start undug and non-diggable; created lazily on first access rather than
+   * pre-filled, since most of the map will likely never be dug into. */
   get(xg: number, yg: number): UndergroundCellData {
     let cell = this.cells.get(this.key(xg, yg));
     if (!cell) {
-      cell = { dug: false };
+      cell = { dug: false, diggable: false };
       this.cells.set(this.key(xg, yg), cell);
     }
     return cell;
@@ -52,9 +76,53 @@ export class UndergroundGrid {
     return xg >= this.minXg && xg <= this.maxXg && yg >= this.minYg && yg <= this.maxYg;
   }
 
+  /** True only for cells ants are actually allowed to excavate — see `UndergroundCellData`. */
+  canDig(xg: number, yg: number): boolean {
+    const cell = this.get(xg, yg);
+    return !cell.dug && cell.diggable;
+  }
+
+  /** Excavates a cell outright, bypassing the diggable check — used for seeding the pre-built
+   * starter nest (which isn't "designated," it just exists) and by `ensureDesignatedFrontier`'s
+   * ant-driven digging once a cell has actually been designated. Also updates the frontier
+   * bookkeeping: the newly-dug cell drops out of both candidate sets, and its still-undug
+   * neighbors become expansion candidates for future designation. */
   dig(xg: number, yg: number): void {
     if (!this.isInsideGrid(xg, yg)) return;
-    this.get(xg, yg).dug = true;
+    const cell = this.get(xg, yg);
+    cell.dug = true;
+    cell.diggable = false;
+    const k = this.key(xg, yg);
+    this.expansionCandidates.delete(k);
+    this.diggableFrontier.delete(k);
+
+    for (const [dx, dy] of NEIGHBOR_OFFSETS) {
+      const nx = xg + dx;
+      const ny = yg + dy;
+      if (this.isInsideGrid(nx, ny) && !this.get(nx, ny).dug) {
+        this.expansionCandidates.add(this.key(nx, ny));
+      }
+    }
+  }
+
+  /** Marks one more expansion candidate as the colony's next dig site, if the nest still has
+   * room to grow (`dugCount() < targetVolume`) and the designated pool isn't already at
+   * `poolSize`. Call once per frame; cheap when there's nothing to do. Real colonies extend
+   * their nest incrementally at the working edge, not by ants opportunistically punching holes
+   * anywhere they bump into dirt — this keeps growth to a small, controlled active frontier. */
+  ensureDesignatedFrontier(poolSize: number, targetVolume: number): void {
+    if (this.dugCount() >= targetVolume) return;
+    while (this.diggableFrontier.size < poolSize) {
+      const eligible: string[] = [];
+      for (const k of this.expansionCandidates) {
+        if (!this.diggableFrontier.has(k)) eligible.push(k);
+      }
+      if (eligible.length === 0) return; // no more room to expand into right now
+      const picked = eligible[Math.floor(Math.random() * eligible.length)];
+      this.diggableFrontier.add(picked);
+      const [xg, yg] = picked.split(',').map(Number);
+      this.get(xg, yg).diggable = true;
+    }
   }
 
   /** Digs a filled disc of radius `radiusCells` around (cx, cy) — used to seed the starting
@@ -87,30 +155,33 @@ export class UndergroundGrid {
     }
   }
 
-  /** Seeds a small pre-built starter nest around the entrance — an entrance chamber plus a
-   * handful of satellite chambers linked by corridors — so the underground view looks like an
-   * established colony immediately rather than an empty seed that digging alone would take a
-   * long time to fill in. Ongoing digging (see `Simulation.stepUndergroundAnt`) expands outward
-   * from this base. */
+  /** Seeds a small pre-built starter nest around the entrance — a floor-plan shape with a clear
+   * hierarchy, rather than uniform blob-like chambers: a small entrance foyer, a single thin
+   * (single-cell) main corridor running down from it, and a handful of distinctly *larger* hall
+   * chambers branching off that spine at intervals, alternating sides — so tunnel vs. room reads
+   * clearly from shape alone (thin corridor vs. wide open chamber), like rooms off a hallway.
+   * Runs before the simulation starts, so the underground view looks like an established colony
+   * immediately rather than an empty seed. Ongoing digging (see `Simulation.stepUndergroundAnt`)
+   * extends this spine/branch shape further via `ensureDesignatedFrontier`. */
   seedStarterNest(entranceXg: number, entranceYg: number): void {
-    this.digChamber(entranceXg, entranceYg, 2);
+    this.digChamber(entranceXg, entranceYg, 1);
 
-    const satellites: ReadonlyArray<{ dx: number; dy: number; radius: number }> = [
-      { dx: -3, dy: 4, radius: 2 },
-      { dx: 4, dy: 5, radius: 1 },
-      { dx: -1, dy: 8, radius: 2 },
-      { dx: 3, dy: 10, radius: 1 },
+    const trunkLength = 20;
+    this.digTunnel(entranceXg, entranceYg, entranceXg, entranceYg + trunkLength, 0);
+
+    const branches: ReadonlyArray<{ alongTrunk: number; side: -1 | 1; branchLength: number; radius: number }> = [
+      { alongTrunk: 5, side: -1, branchLength: 3, radius: 2 },
+      { alongTrunk: 9, side: 1, branchLength: 4, radius: 3 },
+      { alongTrunk: 14, side: -1, branchLength: 3, radius: 2 },
+      { alongTrunk: 18, side: 1, branchLength: 3, radius: 3 },
     ];
 
-    let prevX = entranceXg;
-    let prevY = entranceYg;
-    for (const sat of satellites) {
-      const sx = entranceXg + sat.dx;
-      const sy = entranceYg + sat.dy;
-      this.digTunnel(prevX, prevY, sx, sy, 1);
-      this.digChamber(sx, sy, sat.radius);
-      prevX = sx;
-      prevY = sy;
+    for (const branch of branches) {
+      const trunkX = entranceXg;
+      const trunkY = entranceYg + branch.alongTrunk;
+      const chamberX = trunkX + branch.side * branch.branchLength;
+      this.digTunnel(trunkX, trunkY, chamberX, trunkY, 0);
+      this.digChamber(chamberX, trunkY, branch.radius);
     }
   }
 

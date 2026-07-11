@@ -23,6 +23,7 @@ export class UndergroundRenderer {
 
   private readonly worldContainer = new Container();
   private readonly groundContainer = new Container();
+  private readonly cellContainer = new Container();
   private readonly antContainer = new Container();
 
   private readonly groundSprites = new Map<string, Sprite>();
@@ -34,11 +35,12 @@ export class UndergroundRenderer {
     this.textures = textures;
     this.camera = camera;
 
-    this.worldContainer.addChild(this.groundContainer, this.antContainer);
+    this.worldContainer.addChild(this.groundContainer, this.cellContainer, this.antContainer);
     this.app.stage.addChild(this.worldContainer);
     this.worldContainer.visible = false;
 
     this.buildGroundTiles();
+    this.buildEntranceMarker();
     this.buildAntSprites();
   }
 
@@ -67,6 +69,21 @@ export class UndergroundRenderer {
         this.groundSprites.set(tileKey(xg, yg), sprite);
       }
     }
+  }
+
+  /** A clear "this is the hole leading back up to the surface" landmark — reuses the same cave
+   * texture as the surface entrance so the connection between the two overlays reads instantly,
+   * rather than the entrance chamber looking like just another patch of tunnel. */
+  private buildEntranceMarker(): void {
+    const { undergroundGrid, cavePosition } = this.sim;
+    const [xg, yg] = undergroundGrid.worldToGrid(cavePosition.x, cavePosition.y);
+    const origin = undergroundGrid.gridToWorldOrigin(xg, yg);
+
+    const sprite = new Sprite(this.textures.cave);
+    sprite.scale.set(IMG_SCALE);
+    sprite.x = origin.x;
+    sprite.y = origin.y;
+    this.cellContainer.addChild(sprite);
   }
 
   private buildAntSprites(): void {
