@@ -102,7 +102,7 @@ describe('Simulation', () => {
   });
 
   it('pheromone concentration decays over time when not refreshed', () => {
-    const info = { strength: 1, lastUpdated: 0, time: -1, where: { x: 0, y: 0 } };
+    const info = { strength: 1, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } };
     const initial = readPheromoneStrength(info, 0, cfg.pheromoneDecayPerFrame);
     const decayedLater = readPheromoneStrength(info, 1000, cfg.pheromoneDecayPerFrame);
 

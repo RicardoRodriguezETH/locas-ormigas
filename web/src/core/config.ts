@@ -15,11 +15,16 @@ export const GRID_COM_SCAN: ReadonlyArray<readonly [number, number]> = [
   [1, 1],
 ];
 
-/** Both snap directly to whichever nearby cell has the best-scoring lead for what an ant is
- * seeking. 'legacy' scores leads by raw frame-time (never fades once written). 'gradient'
- * scores by that same time run through exponential decay (evaporates if not refreshed) — see
- * `Simulation.communicatePheromones` for both, kept side by side for comparison. */
-export type PheromoneAlgorithm = 'legacy' | 'gradient';
+/** 'legacy' and 'gradient' both snap directly to whichever nearby cell has the best-scoring
+ * lead for what an ant is seeking — 'legacy' scores by raw frame-time (never fades), 'gradient'
+ * by that same time run through exponential decay (evaporates if not refreshed). 'flow' is
+ * structurally different: instead of a remembered coordinate, each cell holds a decaying
+ * *direction* vector built from the headings of ants who walked through it, and followers
+ * align with the local vector sum rather than beelining for a point — the piece needed to
+ * route around obstacles and support multiple simultaneous destinations. See
+ * `Simulation.communicatePheromones`/`communicatePheromonesFlow`, kept side by side so all
+ * three are directly comparable. */
+export type PheromoneAlgorithm = 'legacy' | 'gradient' | 'flow';
 
 export interface SimConfig {
   numAnts: number;

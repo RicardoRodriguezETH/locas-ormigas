@@ -8,11 +8,17 @@ export interface PheromoneInfo {
    * `readPheromoneStrength` rather than using this field directly. Used by the 'gradient'
    * algorithm, and kept updated by 'legacy' too so the debug overlay can render either. */
   strength: number;
+  /** Shared decay clock for `strength` and `flow` alike — whichever algorithm is active only
+   * ever touches the fields it uses, so one timestamp for both is safe. */
   lastUpdated: number;
   /** 'legacy' algorithm only: frame this was last reported here; -1 = never. */
   time: number;
-  /** World position to head toward to chase this lead. */
+  /** 'legacy'/'gradient' only: world position to head toward to chase this lead. */
   where: Vector2;
+  /** 'flow' algorithm only: decaying sum of the headings of ants who deposited here while
+   * seeking this interest. Its *direction* is the trail's direction, its *magnitude* is the
+   * trail's strength — read it with `readPheromoneFlow`. */
+  flow: Vector2;
 }
 
 export interface GridCellData {
@@ -29,6 +35,15 @@ export function readPheromoneStrength(info: PheromoneInfo, frame: number, decayP
   const elapsed = frame - info.lastUpdated;
   if (elapsed <= 0) return info.strength;
   return info.strength * decayPerFrame ** elapsed;
+}
+
+/** Current flow vector, decayed the same way as `readPheromoneStrength` — shrinking the
+ * vector's magnitude over time while preserving its direction. */
+export function readPheromoneFlow(info: PheromoneInfo, frame: number, decayPerFrame: number): Vector2 {
+  const elapsed = frame - info.lastUpdated;
+  if (elapsed <= 0) return info.flow;
+  const factor = decayPerFrame ** elapsed;
+  return { x: info.flow.x * factor, y: info.flow.y * factor };
 }
 
 /** Placeable tile types, as exposed to the UI's cell-painting tool. */
@@ -74,8 +89,8 @@ export class WorldGrid {
       pass: true,
       cell: null,
       pheromones: {
-        food: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 } },
-        cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 } },
+        food: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } },
+        cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } },
       },
     };
     if (randomize) {

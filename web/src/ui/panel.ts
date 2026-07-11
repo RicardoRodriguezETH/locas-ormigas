@@ -16,6 +16,7 @@ const TOOLS: Array<{ tool: Tool; label: string }> = [
 const ALGORITHMS: Array<{ algorithm: PheromoneAlgorithm; label: string }> = [
   { algorithm: 'legacy', label: 'Legacy' },
   { algorithm: 'gradient', label: 'Gradient' },
+  { algorithm: 'flow', label: 'Flow' },
 ];
 
 export interface PanelCallbacks {

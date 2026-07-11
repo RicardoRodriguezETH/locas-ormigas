@@ -1,21 +1,27 @@
 import { type Ant, createAnt, enablePheromonesWrite, isComNeeded, objectAvoidance, updateAnt } from './ant';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
-import { type PaintableCellType, WorldGrid, readPheromoneStrength } from './grid';
-import { createRng, generateMaze } from './maze';
-import { directionTo, fromAngle, scale, type Vector2 } from './vector';
+import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
+import { add, directionTo, fromAngle, length, normalize, scale, type Vector2 } from './vector';
 
 export interface SimulationOptions {
   /** Sprinkle a little random grass/rubble across the map on init. Tests usually want this off. */
   randomizeGrid?: boolean;
 }
 
-/** Base map: a generated maze standing between the colony and two food sources, meant to
- * stress-test pathing and pheromone-following against something harder than open ground —
- * a required entrance, winding corridors, and two simultaneous destinations. Fixed seed so
- * everyone gets the same layout to compare algorithms against. */
-const MAZE_COLS = 9;
-const MAZE_ROWS = 7;
-const MAZE_SEED = 1337;
+/** Base map: three staggered wall segments standing between the colony and two food sources,
+ * forcing a zigzag detour rather than a beeline — enough to stress-test pathing and
+ * pheromone-following without being a full labyrinth (a proper generated maze turned out to
+ * be nearly unsolvable for any of the algorithms within a reasonable time). */
+const WALL_REGION_WIDTH = 18;
+const WALL_REGION_HEIGHT = 15;
+const WALL_GAP_SIZE = 3;
+/** X offsets (within the region) of the three wall columns, and whether each one's gap is at
+ * the top or bottom — alternating, so ants have to weave through them. */
+const WALLS: ReadonlyArray<{ x: number; gapAtTop: boolean }> = [
+  { x: 4, gapAtTop: true },
+  { x: 9, gapAtTop: false },
+  { x: 14, gapAtTop: true },
+];
 
 /** Owns the ant colony and drives the pheromone-following behavior each frame: move, react to
  * the tile underfoot, then read/write trail info in the surrounding grid cells. */
@@ -32,7 +38,7 @@ export class Simulation {
 
   init(numAnts: number = this.config.numAnts): void {
     this.grid.seedCell('cave', -6, -4);
-    this.buildMazeStressTestMap();
+    this.buildZigzagStressTestMap();
 
     this.ants = [];
     for (let i = 1; i <= numAnts; i++) {
@@ -46,31 +52,28 @@ export class Simulation {
     this.grid.setCellAtWorld(type, worldPosition);
   }
 
-  /** Carves the maze into the grid, positioned relative to the configured map bounds (near
-   * the right edge, vertically centered), breaches a single entrance facing the open field
-   * where the colony spawns, and seeds two food sources at far interior corners so reaching
-   * either requires real navigation through the maze rather than a beeline. */
-  private buildMazeStressTestMap(): void {
-    const maze = generateMaze(MAZE_COLS, MAZE_ROWS, createRng(MAZE_SEED));
+  /** Carves the three staggered wall segments into the grid, positioned relative to the
+   * configured map bounds (near the right edge, vertically centered), and seeds two food
+   * sources beyond the last wall at different heights so reaching either requires weaving
+   * through all three gaps rather than a beeline. */
+  private buildZigzagStressTestMap(): void {
     const gridSize = this.config.mapGridSize;
     const maxXg = Math.floor(this.config.mapMaxX / gridSize);
-    const originX = maxXg - maze.width - 2;
-    const originY = -Math.floor(maze.height / 2);
+    const originX = maxXg - WALL_REGION_WIDTH - 2;
+    const originY = -Math.floor(WALL_REGION_HEIGHT / 2);
 
-    for (let x = 0; x < maze.width; x++) {
-      for (let y = 0; y < maze.height; y++) {
-        if (!maze.passable[x][y]) {
-          this.grid.get(originX + x, originY + y).pass = false;
+    for (const wall of WALLS) {
+      for (let y = 0; y < WALL_REGION_HEIGHT; y++) {
+        const inGap = wall.gapAtTop ? y < WALL_GAP_SIZE : y >= WALL_REGION_HEIGHT - WALL_GAP_SIZE;
+        if (!inGap) {
+          this.grid.get(originX + wall.x, originY + y).pass = false;
         }
       }
     }
 
-    // breach the west wall next to the maze's starting cell (logical (0,0), tile (1,1))
-    this.grid.get(originX, originY + 1).pass = true;
-
-    // two food sources at the maze's far interior corners, reached by different corridors
-    this.grid.seedCell('food', originX + maze.width - 2, originY + 1);
-    this.grid.seedCell('food', originX + maze.width - 2, originY + maze.height - 2);
+    const lastWallX = WALLS[WALLS.length - 1].x;
+    this.grid.seedCell('food', originX + lastWallX + 4, originY + 2);
+    this.grid.seedCell('food', originX + lastWallX + 4, originY + WALL_REGION_HEIGHT - 3);
   }
 
   update(): void {
@@ -87,7 +90,12 @@ export class Simulation {
     this.grid.resolveBlockingCollisionAndMove(ant, this.frame);
     this.interactionWithCells(ant);
 
-    if (this.config.antComEveryFrame || isComNeeded(ant, this.frame)) {
+    // 'flow' needs to deposit every frame — a trail only reads as a spatially continuous line
+    // if ants lay it densely as they walk, unlike 'legacy'/'gradient''s sparse "check in every
+    // few frames" snapshot mechanic.
+    const shouldCommunicate =
+      this.config.pheromoneAlgorithm === 'flow' || this.config.antComEveryFrame || isComNeeded(ant, this.frame);
+    if (shouldCommunicate) {
       this.communicatePheromones(ant);
     }
 
@@ -108,10 +116,19 @@ export class Simulation {
   }
 
   /** Ants never talk to each other directly; they leave/read pheromone info on the grid cell
-   * they're standing on. Both algorithms share the same "snap directly to whichever nearby
-   * cell scores best, and only overwrite a cell if you'd raise its score" mechanic — that
-   * decisive, immediate-commitment behavior is what makes it work. They differ only in what
-   * "score" means:
+   * they're standing on. Dispatches to whichever algorithm is configured. */
+  private communicatePheromones(ant: Ant): void {
+    if (this.config.pheromoneAlgorithm === 'flow') {
+      this.communicatePheromonesFlow(ant);
+    } else {
+      this.communicatePheromonesScored(ant);
+    }
+  }
+
+  /** 'legacy' and 'gradient': both share the same "snap directly to whichever nearby cell
+   * scores best, and only overwrite a cell if you'd raise its score" mechanic — that decisive,
+   * immediate-commitment behavior is what makes it work. They differ only in what "score"
+   * means:
    *  - 'legacy': raw frame-time. A lead is exactly as good as it ever was until something
    *    newer replaces it — simple, but stale leads can linger and mislead indefinitely.
    *  - 'gradient': frame-time run through exponential decay, so a lead quietly loses
@@ -119,7 +136,7 @@ export class Simulation {
    *    how recently *it* personally confirmed the resource. This is the one piece of realism
    *    (evaporation) the original was missing, without touching the mechanic that actually
    *    makes foraging work. */
-  private communicatePheromones(ant: Ant): void {
+  private communicatePheromonesScored(ant: Ant): void {
     const useDecay = this.config.pheromoneAlgorithm === 'gradient';
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
 
@@ -150,6 +167,46 @@ export class Simulation {
         }
         info.lastUpdated = this.frame;
         info.where = { ...ant.oldestPositionRemembered };
+      }
+    } else if (this.frame >= ant.pheromonesBackTime) {
+      enablePheromonesWrite(ant);
+    }
+  }
+
+  /** 'flow': each cell holds a decaying direction *vector* per interest — built from the
+   * headings of ants who walked through it while seeking that interest — instead of a
+   * remembered coordinate. An ant only deposits onto the channel matching what it's *currently*
+   * seeking, using its *own current heading*: if it's being guided reasonably well, that
+   * heading already points roughly the right way, so the trail inherits the correct direction
+   * (including bending around obstacles) for free. Followers align with the summed vector from
+   * their neighborhood rather than beelining for a stored point, which is what lets a trail
+   * curve through a maze and lets multiple simultaneous trails coexist without needing to
+   * track which source each one leads to. */
+  private communicatePheromonesFlow(ant: Ant): void {
+    const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
+    const decay = this.config.pheromoneDecayPerFrame;
+
+    let pull: Vector2 = { x: 0, y: 0 };
+    for (const [dx, dy] of GRID_COM_SCAN) {
+      const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
+      pull = add(pull, readPheromoneFlow(info, this.frame, decay));
+    }
+    const strength = length(pull);
+    if (strength > 0) {
+      const confidence = Math.min(1, strength / this.config.pheromoneSaturation);
+      const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(pull, ant.direction), confidence));
+      ant.direction = normalize(blended, ant.direction);
+    }
+
+    if (ant.pheromonesWrite) {
+      const lastSeen = ant.lastTimeSeen[ant.lookingFor];
+      if (lastSeen >= 0) {
+        const personalFreshness = decay ** (this.frame - lastSeen);
+        const depositAmount = this.config.pheromoneDepositAmount * personalFreshness;
+        const info = this.grid.get(gx, gy).pheromones[ant.lookingFor];
+        const decayedFlow = readPheromoneFlow(info, this.frame, decay);
+        info.flow = add(decayedFlow, scale(ant.direction, depositAmount));
+        info.lastUpdated = this.frame;
       }
     } else if (this.frame >= ant.pheromonesBackTime) {
       enablePheromonesWrite(ant);

@@ -81,6 +81,11 @@ body {
 
 .panel-row {
   flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.panel-row .tool-button {
+  flex: 1 1 40%;
 }
 
 .tool-button {

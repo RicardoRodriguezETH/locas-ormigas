@@ -3,7 +3,7 @@ import { Camera } from '../core/camera';
 import { dirToRad, walkFrame } from '../core/ant';
 import type { Cell } from '../core/cells';
 import { PortalCell } from '../core/cells';
-import { readPheromoneStrength } from '../core/grid';
+import { readPheromoneFlow, readPheromoneStrength } from '../core/grid';
 import type { Simulation } from '../core/simulation';
 import type { Textures } from './textures';
 
@@ -151,27 +151,70 @@ export class SimulationRenderer {
     }
   }
 
-  /** Tints each tile by pheromone concentration — a heatmap rather than lines to a
-   * remembered point, since the 'gradient' algorithm has no such point (it steers by
-   * comparing neighboring cells' strength directly, not by recalling a coordinate). Works
-   * the same way for 'legacy', which also stamps strength/lastUpdated for this purpose. */
+  /** Draws a short arrow per cell/interest showing *which way* that cell's pheromone points,
+   * not just how strong it is — a flat tile tint can't show that, and direction is the whole
+   * point of comparing algorithms (especially 'flow', which has no other visual signature).
+   * For 'legacy'/'gradient' the arrow points at the remembered `where`; for 'flow' it's the
+   * decayed flow vector itself. Intensity is squared before mapping to alpha/length so a
+   * merely-touched cell stays faint and only genuinely concentrated trails stand out — with
+   * 1500+ ants constantly refreshing nearby cells, a linear mapping made most of the map look
+   * uniformly "lit" instead of showing where the real trails are. */
   private syncPheromoneOverlay(): void {
     this.pheromoneLayer.clear();
     if (!this.showPheromones) return;
 
     const { grid, config, frame } = this.sim;
+    const gridSize = config.mapGridSize;
+    const isFlow = config.pheromoneAlgorithm === 'flow';
+
     for (let xg = grid.minXg; xg <= grid.maxXg; xg++) {
       for (let yg = grid.minYg; yg <= grid.maxYg; yg++) {
+        const centerX = xg * gridSize + gridSize / 2;
+        const centerY = yg * gridSize + gridSize / 2;
         const { pheromones } = grid.get(xg, yg);
+
         for (const [interest, info] of Object.entries(pheromones)) {
-          const strength = readPheromoneStrength(info, frame, config.pheromoneDecayPerFrame);
-          if (strength <= 0.05) continue;
-          // saturate visual intensity at the same point trail-following itself saturates
-          const intensity = Math.min(1, strength / config.pheromoneSaturation);
+          let magnitude: number;
+          let dirX: number;
+          let dirY: number;
+
+          if (isFlow) {
+            const flow = readPheromoneFlow(info, frame, config.pheromoneDecayPerFrame);
+            magnitude = Math.hypot(flow.x, flow.y);
+            if (magnitude < 1e-3) continue;
+            dirX = flow.x / magnitude;
+            dirY = flow.y / magnitude;
+          } else {
+            magnitude = readPheromoneStrength(info, frame, config.pheromoneDecayPerFrame);
+            if (magnitude <= 0) continue;
+            const dx = info.where.x - centerX;
+            const dy = info.where.y - centerY;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-3) continue;
+            dirX = dx / len;
+            dirY = dy / len;
+          }
+
+          const raw = Math.min(1, magnitude / config.pheromoneSaturation);
+          const intensity = raw * raw; // steeper falloff so weak/ambient signal stays faint
+          if (intensity < 0.03) continue;
+
           const color = interest === 'food' ? 0xfff0c8 : 0xc8c8ff;
+          const shaftLen = gridSize * 0.15 + gridSize * 0.3 * intensity;
+          const tipX = centerX + dirX * shaftLen;
+          const tipY = centerY + dirY * shaftLen;
+          const angle = Math.atan2(dirY, dirX);
+          const headLen = Math.min(3, shaftLen * 0.45);
+          const headSpread = Math.PI / 7;
+
           this.pheromoneLayer
-            .rect(xg * config.mapGridSize, yg * config.mapGridSize, config.mapGridSize, config.mapGridSize)
-            .fill({ color, alpha: 0.12 + intensity * 0.55 });
+            .moveTo(centerX, centerY)
+            .lineTo(tipX, tipY)
+            .moveTo(tipX, tipY)
+            .lineTo(tipX - headLen * Math.cos(angle - headSpread), tipY - headLen * Math.sin(angle - headSpread))
+            .moveTo(tipX, tipY)
+            .lineTo(tipX - headLen * Math.cos(angle + headSpread), tipY - headLen * Math.sin(angle + headSpread))
+            .stroke({ width: 0.3 + intensity * 0.7, color, alpha: 0.25 + intensity * 0.65 });
         }
       }
     }
