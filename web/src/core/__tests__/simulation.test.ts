@@ -246,6 +246,41 @@ describe('Simulation', () => {
     expect(ant.exitPath).toHaveLength(0);
   });
 
+  it('seeds an established colony with in-progress brood and starting food, so growth begins quickly', () => {
+    vi.restoreAllMocks(); // this test needs real randomness for the stage spread, not the 0.5 stub
+    const sim = new Simulation(defaultConfig, { randomizeGrid: false });
+    sim.init(600);
+
+    // brood pipeline is pre-populated across stages rather than starting empty
+    expect(sim.brood.length).toBeGreaterThan(0);
+    expect(sim.brood.some((b) => b.stage === 'egg')).toBe(true);
+    expect(sim.brood.some((b) => b.stage === 'larva')).toBe(true);
+    expect(sim.brood.some((b) => b.stage === 'pupa')).toBe(true);
+    // seeded brood sits in the nursery, not waiting to be carried there
+    expect(sim.brood.every((b) => b.atNursery)).toBe(true);
+    expect(sim.foodStored).toBeGreaterThan(0);
+
+    // a new worker ecloses within the first few hundred frames, not ~20k later
+    const startPop = sim.ants.length;
+    let firstEclosion = -1;
+    for (let f = 0; f < 2000 && firstEclosion === -1; f++) {
+      sim.update();
+      if (sim.ants.length > startPop) firstEclosion = f;
+    }
+    expect(firstEclosion).toBeGreaterThanOrEqual(0);
+    expect(firstEclosion).toBeLessThan(2000);
+  });
+
+  it('caps reproduction against the actual starting population, not the config default', () => {
+    // start well below config.numAnts (1500); the cap should track the 40 we started with
+    const sim = new Simulation(defaultConfig, { randomizeGrid: false });
+    sim.init(40);
+    const cap = 40 * defaultConfig.populationCapMultiplier;
+
+    for (let i = 0; i < 40000; i++) sim.update();
+    expect(sim.ants.length).toBeLessThanOrEqual(Math.ceil(cap));
+  });
+
   it('records a bounded rolling history for the stats overlay, sampled roughly every 30 frames', () => {
     const sim = new Simulation(cfg, { randomizeGrid: false });
     sim.init(5);

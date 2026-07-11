@@ -28,6 +28,32 @@ export function createEgg(position: Vector2): Brood {
   return { stage: 'egg', position: { ...position }, ageDays: 0, nutritionReceived: 0, beingCarried: false, atNursery: false };
 }
 
+/** Creates a brood item already partway through development, for seeding an *established*
+ * colony at init — same idea as sampling a spread of adult ages rather than starting everyone
+ * newborn (see `Simulation.init`). `totalAgeDays` is age measured from egg-laying across the
+ * whole egg→larva→pupa timeline; the stage and within-stage age are derived from it, and any
+ * larva is treated as already fed (an established nursery keeps its larvae fed). Marked
+ * `atNursery` since it's placed directly in the nursery, not carried there. */
+export function createSeededBrood(position: Vector2, totalAgeDays: number, cfg: SimConfig): Brood {
+  const eggEnd = cfg.eggDurationDays;
+  const larvaEnd = eggEnd + cfg.larvaDurationDays;
+  let stage: BroodStage;
+  let ageDays: number;
+  let nutritionReceived = 0;
+  if (totalAgeDays < eggEnd) {
+    stage = 'egg';
+    ageDays = totalAgeDays;
+  } else if (totalAgeDays < larvaEnd) {
+    stage = 'larva';
+    ageDays = totalAgeDays - eggEnd;
+    nutritionReceived = cfg.larvaNutritionNeeded;
+  } else {
+    stage = 'pupa';
+    ageDays = totalAgeDays - larvaEnd;
+  }
+  return { stage, position: { ...position }, ageDays, nutritionReceived, beingCarried: false, atNursery: true };
+}
+
 export function advanceBroodAge(brood: Brood, cfg: SimConfig): void {
   brood.ageDays += 1 / cfg.framesPerDay;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from '../config';
-import { advanceBroodAge, createEgg, createQueen, feedLarva, tryAdvanceBroodStage } from '../brood';
+import { advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from '../brood';
 
 describe('brood', () => {
   it('createEgg starts at age 0 with no nutrition', () => {
@@ -86,5 +86,23 @@ describe('brood', () => {
     expect(queen.position).toEqual({ x: 5, y: 5 });
     expect(queen.ageDays).toBe(0);
     expect(queen.nextEggAttemptFrame).toBe(0);
+  });
+
+  it('createSeededBrood derives the stage from a total-development age, and pre-feeds larvae', () => {
+    const cfg = { ...defaultConfig, eggDurationDays: 10, larvaDurationDays: 20, pupaDurationDays: 15, larvaNutritionNeeded: 8 };
+
+    const egg = createSeededBrood({ x: 0, y: 0 }, 5, cfg); // within [0, 10)
+    expect(egg.stage).toBe('egg');
+    expect(egg.ageDays).toBe(5);
+    expect(egg.atNursery).toBe(true);
+
+    const larva = createSeededBrood({ x: 0, y: 0 }, 25, cfg); // within [10, 30)
+    expect(larva.stage).toBe('larva');
+    expect(larva.ageDays).toBe(15);
+    expect(larva.nutritionReceived).toBe(8); // established larvae are already fed
+
+    const pupa = createSeededBrood({ x: 0, y: 0 }, 40, cfg); // within [30, 45)
+    expect(pupa.stage).toBe('pupa');
+    expect(pupa.ageDays).toBe(10);
   });
 });

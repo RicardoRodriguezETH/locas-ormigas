@@ -14,7 +14,7 @@ import {
   updateAnt,
   updateRestingMovement,
 } from './ant';
-import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, feedLarva, tryAdvanceBroodStage } from './brood';
+import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { UndergroundGrid } from './underground';
@@ -74,6 +74,10 @@ export class Simulation {
   /** Colony-wide stored food, fed by underground-delivered cargo and spent on egg-laying and
    * larva feeding — see `Simulation.beginUndergroundDelivery`/`updateQueenAndBrood`. */
   foodStored = 0;
+  /** Number of ants spawned at `init` — the base the reproduction cap is measured against (see
+   * `updateQueenAndBrood`), so a colony started with fewer ants (e.g. the reduced mobile count)
+   * caps proportionally rather than always against the config default. */
+  private initialPopulation = 0;
   /** Roughly how many underground ants exist right now — used by `stepUndergroundAnt`'s dig-
    * target check. Not perfectly live (ants now dynamically descend/ascend, see
    * `beginUndergroundDelivery`/`ascendToSurface`), but close enough for a soft growth cap;
@@ -147,6 +151,31 @@ export class Simulation {
         pause(ant, 0, randomInRange(this.config.antInitialRestDurationRange));
       }
       this.ants.push(ant);
+    }
+    this.initialPopulation = this.ants.length;
+    this.seedEstablishedBrood();
+  }
+
+  /** Seeds the nursery with brood already spread across all developmental stages, plus a little
+   * starting food — the same "established colony, not a fresh founding" idea used for the adult
+   * age spread just above. Without this the colony starts with an empty brood pipeline and zero
+   * food, so nothing can eclose until food slowly accumulates (~10k frames at low populations)
+   * *and* a full egg->adult development runs (16.8k frames): the first new worker wouldn't appear
+   * for ~20k frames (minutes of real time, more on a low-framerate phone), leaving the population
+   * visibly frozen at its starting count the whole time. Seeding a spread of in-progress brood
+   * makes new workers start eclosing within the first minute and keeps a steady trickle after. */
+  private seedEstablishedBrood(): void {
+    const cfg = this.config;
+    // enough for the queen to keep laying through the early game before deliveries have ramped up
+    this.foodStored = cfg.queenEggFoodCost * 12;
+
+    const totalDevDays = cfg.eggDurationDays + cfg.larvaDurationDays + cfg.pupaDurationDays;
+    const count = Math.round(this.initialPopulation * cfg.seededBroodFraction);
+    for (let i = 0; i < count; i++) {
+      const scatter = scale(fromAngle(Math.random() * Math.PI * 2), Math.random() * cfg.mapGridSize * 0.4);
+      const position = add(this.nurseryChamberPosition, scatter);
+      // spread uniformly across the whole timeline so eclosions are staggered, not all at once
+      this.brood.push(createSeededBrood(position, Math.random() * totalDevDays, cfg));
     }
   }
 
@@ -459,7 +488,10 @@ export class Simulation {
     this.queen.ageDays += 1 / cfg.framesPerDay;
 
     if (this.frame >= this.queen.nextEggAttemptFrame) {
-      const populationCap = cfg.numAnts * cfg.populationCapMultiplier;
+      // measured against the *actual* starting population, not the config default — a colony
+      // started with fewer ants (e.g. the reduced mobile count) should cap proportionally lower
+      // rather than being allowed to balloon toward the desktop-sized default
+      const populationCap = this.initialPopulation * cfg.populationCapMultiplier;
       if (this.ants.length < populationCap && this.foodStored >= cfg.queenEggFoodCost) {
         this.foodStored -= cfg.queenEggFoodCost;
         this.brood.push(createEgg(this.queen.position));

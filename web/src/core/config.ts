@@ -186,6 +186,11 @@ export interface SimConfig {
    * a simple cap so the new real reproduction pipeline (on top of the existing natural-death
    * respawn safety net) can't grow the colony unboundedly. */
   populationCapMultiplier: number;
+  /** Fraction of the starting population to pre-seed as in-progress brood (eggs/larvae/pupae
+   * spread across all developmental stages) at init, so an established colony starts eclosing
+   * new workers within the first minute rather than after a full ~20k-frame development lag —
+   * see `Simulation.seedEstablishedBrood`. */
+  seededBroodFraction: number;
   /** How close (world units) a wandering underground ant needs to pass to an un-carried,
    * not-yet-nursery brood item to notice and pick it up — opportunistic, like the rest of the
    * underground behavior, not a colony-wide "go fetch this specific egg" assignment. */
@@ -269,6 +274,7 @@ export const defaultConfig: SimConfig = {
   queenEggFoodCost: 5,
   queenEggRetryFrames: 60,
   populationCapMultiplier: 1.3,
+  seededBroodFraction: 0.06,
   broodCarryNoticeRadius: 24,
   antUndergroundDutyDaysRange: [1, 3],
 
