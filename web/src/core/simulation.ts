@@ -175,37 +175,49 @@ export class Simulation {
 
   /** 'flow': each cell holds a decaying direction *vector* per interest — built from the
    * headings of ants who walked through it while seeking that interest — instead of a
-   * remembered coordinate. An ant only deposits onto the channel matching what it's *currently*
-   * seeking, using its *own current heading*: if it's being guided reasonably well, that
-   * heading already points roughly the right way, so the trail inherits the correct direction
-   * (including bending around obstacles) for free. Followers align with the summed vector from
-   * their neighborhood rather than beelining for a stored point, which is what lets a trail
-   * curve through a maze and lets multiple simultaneous trails coexist without needing to
-   * track which source each one leads to. */
+   * remembered coordinate. Followers align with the summed vector from their neighborhood
+   * rather than beelining for a stored point, which is what lets a trail curve around
+   * obstacles and lets multiple simultaneous trails coexist without needing to track which
+   * source each one leads to.
+   *
+   * Deposits go onto *both* interests every time, like legacy/gradient, not just the one the
+   * ant is currently seeking — an ant heading toward its current goal is, by construction,
+   * heading *away* from the one it just left, so that heading reversed is exactly the useful
+   * direction to advertise for the other channel. Depositing only the current-goal channel
+   * misses the single freshest, most useful moment there is: right when an ant discovers a
+   * resource, `lookingFor` has already flipped to the *other* interest before this runs, so
+   * an ant that finds food gets immediately gated out of ever mentioning it via that path. */
   private communicatePheromonesFlow(ant: Ant): void {
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
     const decay = this.config.pheromoneDecayPerFrame;
 
-    let pull: Vector2 = { x: 0, y: 0 };
+    let best: Vector2 | null = null;
+    let bestStrength = 0;
     for (const [dx, dy] of GRID_COM_SCAN) {
       const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
-      pull = add(pull, readPheromoneFlow(info, this.frame, decay));
+      const flow = readPheromoneFlow(info, this.frame, decay);
+      const flowStrength = length(flow);
+      if (flowStrength > bestStrength) {
+        bestStrength = flowStrength;
+        best = flow;
+      }
     }
-    const strength = length(pull);
-    if (strength > 0) {
-      const confidence = Math.min(1, strength / this.config.pheromoneSaturation);
-      const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(pull, ant.direction), confidence));
+    if (best && bestStrength > 0) {
+      const confidence = Math.min(1, bestStrength / this.config.pheromoneSaturation);
+      const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(best, ant.direction), confidence));
       ant.direction = normalize(blended, ant.direction);
     }
 
     if (ant.pheromonesWrite) {
-      const lastSeen = ant.lastTimeSeen[ant.lookingFor];
-      if (lastSeen >= 0) {
+      for (const interest of INTERESTS) {
+        const lastSeen = ant.lastTimeSeen[interest];
+        if (lastSeen < 0) continue;
         const personalFreshness = decay ** (this.frame - lastSeen);
         const depositAmount = this.config.pheromoneDepositAmount * personalFreshness;
-        const info = this.grid.get(gx, gy).pheromones[ant.lookingFor];
+        const heading = interest === ant.lookingFor ? ant.direction : scale(ant.direction, -1);
+        const info = this.grid.get(gx, gy).pheromones[interest];
         const decayedFlow = readPheromoneFlow(info, this.frame, decay);
-        info.flow = add(decayedFlow, scale(ant.direction, depositAmount));
+        info.flow = add(decayedFlow, scale(heading, depositAmount));
         info.lastUpdated = this.frame;
       }
     } else if (this.frame >= ant.pheromonesBackTime) {
