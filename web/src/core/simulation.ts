@@ -1,12 +1,21 @@
 import { type Ant, createAnt, enablePheromonesWrite, isComNeeded, objectAvoidance, updateAnt } from './ant';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { type PaintableCellType, WorldGrid, readPheromoneStrength } from './grid';
+import { createRng, generateMaze } from './maze';
 import { directionTo, fromAngle, scale, type Vector2 } from './vector';
 
 export interface SimulationOptions {
   /** Sprinkle a little random grass/rubble across the map on init. Tests usually want this off. */
   randomizeGrid?: boolean;
 }
+
+/** Base map: a generated maze standing between the colony and two food sources, meant to
+ * stress-test pathing and pheromone-following against something harder than open ground —
+ * a required entrance, winding corridors, and two simultaneous destinations. Fixed seed so
+ * everyone gets the same layout to compare algorithms against. */
+const MAZE_COLS = 9;
+const MAZE_ROWS = 7;
+const MAZE_SEED = 1337;
 
 /** Owns the ant colony and drives the pheromone-following behavior each frame: move, react to
  * the tile underfoot, then read/write trail info in the surrounding grid cells. */
@@ -23,7 +32,7 @@ export class Simulation {
 
   init(numAnts: number = this.config.numAnts): void {
     this.grid.seedCell('cave', -6, -4);
-    this.grid.seedCell('food', 12, 5);
+    this.buildMazeStressTestMap();
 
     this.ants = [];
     for (let i = 1; i <= numAnts; i++) {
@@ -35,6 +44,33 @@ export class Simulation {
 
   setCell(type: PaintableCellType, worldPosition: Vector2): void {
     this.grid.setCellAtWorld(type, worldPosition);
+  }
+
+  /** Carves the maze into the grid, positioned relative to the configured map bounds (near
+   * the right edge, vertically centered), breaches a single entrance facing the open field
+   * where the colony spawns, and seeds two food sources at far interior corners so reaching
+   * either requires real navigation through the maze rather than a beeline. */
+  private buildMazeStressTestMap(): void {
+    const maze = generateMaze(MAZE_COLS, MAZE_ROWS, createRng(MAZE_SEED));
+    const gridSize = this.config.mapGridSize;
+    const maxXg = Math.floor(this.config.mapMaxX / gridSize);
+    const originX = maxXg - maze.width - 2;
+    const originY = -Math.floor(maze.height / 2);
+
+    for (let x = 0; x < maze.width; x++) {
+      for (let y = 0; y < maze.height; y++) {
+        if (!maze.passable[x][y]) {
+          this.grid.get(originX + x, originY + y).pass = false;
+        }
+      }
+    }
+
+    // breach the west wall next to the maze's starting cell (logical (0,0), tile (1,1))
+    this.grid.get(originX, originY + 1).pass = true;
+
+    // two food sources at the maze's far interior corners, reached by different corridors
+    this.grid.seedCell('food', originX + maze.width - 2, originY + 1);
+    this.grid.seedCell('food', originX + maze.width - 2, originY + maze.height - 2);
   }
 
   update(): void {
