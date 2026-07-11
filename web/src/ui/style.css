@@ -121,3 +121,50 @@ body {
   color: var(--text-dim);
   cursor: pointer;
 }
+
+.stats-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: var(--bg);
+  overflow-y: auto;
+  padding: 28px;
+  display: none;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.stats-overlay.visible {
+  display: flex;
+}
+
+.stats-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.stats-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.stats-label {
+  color: var(--text-dim);
+}
+
+.stats-value {
+  font-weight: 600;
+}
+
+.stats-histogram {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  max-width: 100%;
+}

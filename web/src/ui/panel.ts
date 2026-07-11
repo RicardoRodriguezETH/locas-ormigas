@@ -2,11 +2,12 @@ import type { PheromoneAlgorithm } from '../core/config';
 import type { PaintableCellType } from '../core/grid';
 
 export type Tool = 'pan' | PaintableCellType;
-export type ViewLayer = 'surface' | 'underground';
+export type ViewLayer = 'surface' | 'underground' | 'stats';
 
 const LAYERS: Array<{ layer: ViewLayer; label: string }> = [
   { layer: 'surface', label: 'Earth' },
   { layer: 'underground', label: 'Underground' },
+  { layer: 'stats', label: 'Stats' },
 ];
 
 const TOOLS: Array<{ tool: Tool; label: string }> = [

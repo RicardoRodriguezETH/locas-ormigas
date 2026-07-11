@@ -6,6 +6,7 @@ import { SimulationRenderer } from './render/renderer';
 import { loadTextures } from './render/textures';
 import { UndergroundRenderer } from './render/undergroundRenderer';
 import { Panel, type Tool, type ViewLayer } from './ui/panel';
+import { StatsOverlay } from './ui/statsOverlay';
 
 const IDEAL_CONTENT_HEIGHT = 720;
 const NUM_ANTS_DESKTOP = 1500;
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   canvasHost.appendChild(app.canvas);
 
   const textures = await loadTextures('images');
+  const statsOverlay = new StatsOverlay(canvasHost);
 
   let sim: Simulation;
   let renderer: SimulationRenderer;
@@ -45,6 +47,7 @@ async function main(): Promise<void> {
   const applyLayerVisibility = () => {
     renderer.visible = currentLayer === 'surface';
     undergroundRenderer.visible = currentLayer === 'underground';
+    statsOverlay.visible = currentLayer === 'stats';
   };
 
   /** (Re)creates the simulation and its renderers for the given algorithm, preserving the
@@ -165,6 +168,7 @@ async function main(): Promise<void> {
     sim.update();
     renderer.render();
     undergroundRenderer.render();
+    statsOverlay.update(sim);
     panel.updateStats(app.ticker.FPS, sim.ants.length);
   });
 }
