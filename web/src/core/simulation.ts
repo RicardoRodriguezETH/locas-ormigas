@@ -6,10 +6,11 @@ import {
   objectAvoidance,
   updateActivityCycle,
   updateAnt,
+  updateRestingMovement,
 } from './ant';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
-import { add, directionTo, fromAngle, length, normalize, scale, type Vector2 } from './vector';
+import { add, directionTo, distance, fromAngle, length, normalize, scale, type Vector2 } from './vector';
 
 export interface SimulationOptions {
   /** Sprinkle a little random grass/rubble across the map on init. Tests usually want this off. */
@@ -38,6 +39,7 @@ export class Simulation {
   readonly grid: WorldGrid;
   ants: Ant[] = [];
   frame = 0;
+  cavePosition: Vector2 = { x: 0, y: 0 };
 
   constructor(config: SimConfig = defaultConfig, options: SimulationOptions = {}) {
     this.config = config;
@@ -45,7 +47,10 @@ export class Simulation {
   }
 
   init(numAnts: number = this.config.numAnts): void {
-    this.grid.seedCell('cave', -6, -4);
+    const caveGx = -6;
+    const caveGy = -4;
+    this.grid.seedCell('cave', caveGx, caveGy);
+    this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
     this.buildZigzagStressTestMap();
 
     this.ants = [];
@@ -86,13 +91,25 @@ export class Simulation {
 
   update(): void {
     for (const ant of this.ants) {
-      updateActivityCycle(ant, this.config, this.frame);
-      if (!ant.paused) this.stepAnt(ant);
+      const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
+      updateActivityCycle(ant, this.config, this.frame, eligibleToRest);
+      if (ant.paused) {
+        this.stepRestingAnt(ant);
+      } else {
+        this.stepAnt(ant);
+      }
     }
     for (const ant of this.ants) {
       updateAnt(ant, this.config, this.frame);
     }
     this.frame += 1;
+  }
+
+  /** Resting ants just mill slowly near the cave — no pheromone communication, no goal-seeking
+   * collision reaction, just gentle movement and the ordinary map-boundary/wall collision. */
+  private stepRestingAnt(ant: Ant): void {
+    updateRestingMovement(ant, this.config, this.cavePosition);
+    this.grid.resolveBlockingCollisionAndMove(ant, this.frame);
   }
 
   private stepAnt(ant: Ant): void {

@@ -1,5 +1,5 @@
 import type { Interest, SimConfig } from './config';
-import { type Vector2, add, rotate, scale } from './vector';
+import { type Vector2, add, directionTo, distance, normalize, rotate, scale } from './vector';
 
 export interface Cargo {
   count: number;
@@ -130,7 +130,6 @@ export function enablePheromonesWrite(ant: Ant): void {
 export function pause(ant: Ant, frame: number, time: number): void {
   ant.pauseUntil = frame + time;
   ant.paused = true;
-  ant.speed = 0; // waking back up starts slow again, not resuming at cruise speed
 }
 
 export function unpause(ant: Ant): void {
@@ -143,15 +142,25 @@ function randomInRange([min, max]: readonly [number, number]): number {
 
 /** Duty-cycles an ant between active and resting, independent of what it's doing task-wise —
  * real ants take breaks even mid-foraging-career. Call once per ant per frame; owns both the
- * "wake up" and "go rest" transitions, so `updateAnt` no longer needs to. */
-export function updateActivityCycle(ant: Ant, cfg: SimConfig, frame: number): void {
+ * "wake up" and "go rest" transitions, so `updateAnt` no longer needs to.
+ *
+ * `eligibleToRest` gates only the *start* of a rest (an ant already out foraging with an empty
+ * schedule slot just keeps going until it's actually near the cave and free-handed); waking up
+ * is purely time-based so a resting ant never gets stuck resting forever. */
+export function updateActivityCycle(ant: Ant, cfg: SimConfig, frame: number, eligibleToRest: boolean): void {
   if (ant.paused) {
     if (frame >= ant.pauseUntil) {
       unpause(ant);
       ant.restAt = frame + randomInRange(cfg.antActiveDurationRange);
     }
   } else if (frame >= ant.restAt) {
-    pause(ant, frame, randomInRange(cfg.antRestDurationRange));
+    if (eligibleToRest) {
+      pause(ant, frame, randomInRange(cfg.antRestDurationRange));
+    } else {
+      // not near the cave (or currently carrying food) — check again shortly rather than
+      // waiting for the next full active-duration window to roll around
+      ant.restAt = frame + 30;
+    }
   }
 }
 
@@ -184,6 +193,23 @@ export function updateAnt(ant: Ant, cfg: SimConfig, frame: number): void {
   const erratic = frame < ant.informedUntil ? cfg.antErraticInformed : cfg.antErraticSearching;
   ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
   ant.friction = 1;
+}
+
+/** Movement for a resting ant: a slow mill/chill near the cave rather than a full freeze.
+ * Wanders with a loose heading jitter, blended with a gentle pull back toward the cave that
+ * strengthens the further the ant drifts from it — keeps resting ants visually clustered
+ * around the colony entrance instead of drifting off across the map. */
+export function updateRestingMovement(ant: Ant, cfg: SimConfig, cavePosition: Vector2): void {
+  ant.speed = cfg.antRestSpeed;
+  ant.direction = rotate(ant.direction, cfg.antRestErratic * Math.random() - cfg.antRestErratic * 0.5);
+
+  const distanceFromCave = distance(ant.position, cavePosition);
+  const driftFraction = distanceFromCave / cfg.antRestTetherRadius;
+  if (driftFraction > 0.5) {
+    const homeward = directionTo(ant.position, cavePosition, ant.direction);
+    const pull = Math.min(1, (driftFraction - 0.5) * 2);
+    ant.direction = normalize(add(scale(ant.direction, 1 - pull), scale(homeward, pull)), ant.direction);
+  }
 }
 
 /** Steer away from an obstacle sensed straight ahead, by checking a bit left/right of it. */

@@ -56,6 +56,15 @@ export interface SimConfig {
    * averages out to roughly 40% of the colony resting at any moment, matching observed real
    * ant colony inactivity rates (studies report ~40-65% of workers inactive at a given time). */
   antRestDurationRange: [number, number];
+  /** How close to the cave (world units) an ant must be to be eligible to start resting, and
+   * how far a resting ant is allowed to mill before being pulled back — real ants rest in and
+   * around the nest, not wherever they happen to be out on the trail. */
+  antRestTetherRadius: number;
+  /** Crawl speed while resting/milling near the cave — much slower than foraging cruise speed,
+   * but not a full freeze. */
+  antRestSpeed: number;
+  /** Heading jitter while milling at rest. */
+  antRestErratic: number;
 
   mapMinX: number;
   mapMinY: number;
@@ -89,6 +98,9 @@ export const defaultConfig: SimConfig = {
 
   antActiveDurationRange: [400, 1000],
   antRestDurationRange: [300, 700],
+  antRestTetherRadius: 60,
+  antRestSpeed: 0.2,
+  antRestErratic: 0.35,
 
   mapMinX: -350,
   mapMinY: -250,
