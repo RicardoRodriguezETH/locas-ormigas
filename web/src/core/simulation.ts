@@ -8,7 +8,6 @@ import {
   objectAvoidance,
   pause,
   randomInRange,
-  respawnAsCallow,
   taskFound,
   updateActivityCycle,
   updateAnt,
@@ -211,11 +210,19 @@ export class Simulation {
 
   update(): void {
     this.deliveriesThisFrame = 0;
+    let dead: Set<Ant> | null = null;
 
     for (const ant of this.ants) {
       advanceAge(ant, this.config);
       if (ant.ageDays >= ant.naturalLifespanDays) {
-        this.respawnAtHome(ant);
+        // natural death: remove the ant outright. The queen's homeostatic egg-laying
+        // (`updateQueenAndBrood`) replaces the loss with a worker that ecloses from the nest, so
+        // the colony holds steady without the old in-place "respawn as callow" — which spawned a
+        // fresh pale ant wherever each ant happened to die, reading as ants randomly popping into
+        // existence all over the surface.
+        this.settleDeadAnt(ant);
+        (dead ??= new Set<Ant>()).add(ant);
+        continue;
       }
 
       const isCallow = getLifeStage(ant, this.config) === 'callow';
@@ -236,7 +243,7 @@ export class Simulation {
       }
     }
     for (const ant of this.ants) {
-      if (ant.layer === 'surface') updateAnt(ant, this.config, this.frame);
+      if (ant.layer === 'surface' && !dead?.has(ant)) updateAnt(ant, this.config, this.frame);
     }
 
     this.updateForagingThrottle();
@@ -244,8 +251,19 @@ export class Simulation {
     const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
     this.undergroundGrid.ensureDesignatedFrontier(this.config.antUndergroundDesignationPoolSize, targetVolume);
     this.updateQueenAndBrood();
+    if (this.foodStored > this.config.foodStorageCap) this.foodStored = this.config.foodStorageCap;
+    if (dead) this.ants = this.ants.filter((a) => !dead!.has(a));
     if (this.frame % HISTORY_SAMPLE_INTERVAL_FRAMES === 0) this.recordHistorySample();
     this.frame += 1;
+  }
+
+  /** Settles an ant's in-flight state the frame it dies, before it's removed from `this.ants`:
+   * release any brood it was carrying, land any delivery already counted at the cave, and keep
+   * the underground headcount accurate. */
+  private settleDeadAnt(ant: Ant): void {
+    if (ant.carriedBrood) ant.carriedBrood.beingCarried = false;
+    if (ant.deliveringUnderground && ant.cargo.count > 0) this.foodStored += 1;
+    if (ant.layer === 'underground') this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
   }
 
   /** A length-of-underground-duty-shift in frames, drawn *continuously* across
@@ -269,32 +287,6 @@ export class Simulation {
       dugCount: this.undergroundGrid.dugCount(),
     });
     if (this.history.length > HISTORY_MAX_SAMPLES) this.history.shift();
-  }
-
-  /** Natural-death "safety net" respawn (see `respawnAsCallow`) — stays exactly where the ant
-   * already was rather than resetting to the cave. With a large, aging colony this fires
-   * constantly as a background event; snapping the ant back to the nest read as ants randomly
-   * teleporting/disappearing all over the map. The real reproduction pipeline
-   * (`updateQueenAndBrood`) is what should visibly "produce" new ants at the nest — this is
-   * just bookkeeping standing in for one death being offset by one birth. */
-  private respawnAtHome(ant: Ant): void {
-    // capture/settle in-flight state before respawnAsCallow wipes it:
-    // - don't orphan a brood item mid-carry: without this its `beingCarried` flag stays true
-    //   forever (nothing else clears it), permanently excluding it from being picked up again
-    if (ant.carriedBrood) ant.carriedBrood.beingCarried = false;
-    // - a delivery in progress was already counted at the cave (`deliveriesThisFrame`) but only
-    //   credited to `foodStored` on larder arrival; land it here so the food isn't silently lost
-    if (ant.deliveringUnderground && ant.cargo.count > 0) this.foodStored += 1;
-    const wasUnderground = ant.layer === 'underground';
-
-    respawnAsCallow(ant, this.config, ant.position, ant.direction);
-
-    // a respawned underground ant gets `undergroundDutyUntil = -1` from createAnt, which would
-    // trip `beginHeadingToSurface` on the very next frame (branch 4) — send the new callow
-    // straight back out to forage. Give it a normal duty stint instead, like init/eclosion do.
-    if (wasUnderground) {
-      ant.undergroundDutyUntil = this.frame + this.randomDutyFrames();
-    }
   }
 
   /** Underground behavior. Five modes, checked in order:
@@ -526,11 +518,15 @@ export class Simulation {
     this.queen.ageDays += 1 / cfg.framesPerDay;
 
     if (this.frame >= this.queen.nextEggAttemptFrame) {
-      // measured against the *actual* starting population, not the config default — a colony
-      // started with fewer ants (e.g. the reduced mobile count) should cap proportionally lower
-      // rather than being allowed to balloon toward the desktop-sized default
-      const populationCap = this.initialPopulation * cfg.populationCapMultiplier;
-      if (this.ants.length < populationCap && this.foodStored >= cfg.queenEggFoodCost) {
+      // Homeostatic laying: the queen lays to keep the *committed* colony — living workers plus
+      // the brood already developing toward adulthood — near a target measured off the actual
+      // starting population (so a smaller mobile colony targets proportionally lower, and it
+      // never balloons past the config default). Counting in-pipeline brood is what makes this
+      // stable: as workers die, `ants + brood` dips below target and she lays just enough to
+      // refill the pipeline, so eclosions replace losses without over- or under-shooting.
+      const target = this.initialPopulation * cfg.populationCapMultiplier;
+      const committed = this.ants.length + this.brood.length;
+      if (committed < target && this.foodStored >= cfg.queenEggFoodCost) {
         this.foodStored -= cfg.queenEggFoodCost;
         this.brood.push(createEgg(this.queen.position));
         this.queen.nextEggAttemptFrame = this.frame + randomInRange(cfg.queenEggCooldownFramesRange);

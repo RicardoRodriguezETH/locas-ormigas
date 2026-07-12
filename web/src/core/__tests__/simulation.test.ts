@@ -269,7 +269,7 @@ describe('Simulation', () => {
     expect(brood.beingCarried).toBe(false);
   });
 
-  it('an underground ant that dies of old age respawns underground with a fresh duty timer (not an immediate exit) and its in-flight food is credited', () => {
+  it('an ant that dies of old age mid-delivery is removed, and its in-flight food is credited not lost', () => {
     const sim = new Simulation(cfg, { randomizeGrid: false });
     sim.init(1);
 
@@ -284,11 +284,9 @@ describe('Simulation', () => {
 
     sim.update();
 
-    // stayed underground with a real duty stint ahead of it, rather than dutyUntil = -1 which
-    // would send the just-born callow straight back out to the surface
-    expect(ant.layer).toBe('underground');
-    expect(ant.undergroundDutyUntil).toBeGreaterThan(sim.frame);
-    expect(ant.deliveringUnderground).toBe(false);
+    // natural death removes the ant outright (the queen's laying replaces it from the nest)
+    expect(sim.ants).not.toContain(ant);
+    expect(sim.ants).toHaveLength(0);
     // the delivery it was carrying landed instead of vanishing
     expect(sim.foodStored).toBe(foodBefore + 1);
   });

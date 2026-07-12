@@ -196,11 +196,9 @@ export function advanceAge(ant: Ant, cfg: SimConfig): void {
   ant.ageDays += 1 / cfg.framesPerDay;
 }
 
-/** Natural death, standing in for real brood-rearing (no queen/egg-laying system exists yet):
- * rather than actually removing the ant (which would slowly empty the colony over a long play
- * session with nothing replacing losses), it re-emerges as a fresh callow worker at the nest —
- * new size/lifespan sampled, age reset to 0, task/pheromone/trail state reset like a new spawn.
- * Stays on whichever layer the ant was already on. */
+/** Resets an ant in place to a freshly-eclosed callow — new size/lifespan sampled, age 0,
+ * task/pheromone/trail state cleared, staying on its current layer. (No longer used for natural
+ * death, which now removes the ant and lets the queen's egg-laying replace it; kept as a utility.) */
 export function respawnAsCallow(ant: Ant, cfg: SimConfig, position: Vector2, direction: Vector2): void {
   Object.assign(ant, createAnt(cfg, position, direction, 0, ant.layer));
 }

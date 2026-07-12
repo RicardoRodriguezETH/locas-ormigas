@@ -182,10 +182,15 @@ export interface SimConfig {
   queenEggCooldownFramesRange: [number, number];
   queenEggFoodCost: number;
   queenEggRetryFrames: number;
-  /** The queen stops laying once the colony reaches this multiple of its starting population —
-   * a simple cap so the new real reproduction pipeline (on top of the existing natural-death
-   * respawn safety net) can't grow the colony unboundedly. */
+  /** Homeostatic laying target as a multiple of the starting population: the queen lays to keep
+   * living workers + in-pipeline brood near `initialPopulation * this`, replacing natural-death
+   * losses so the colony holds steady rather than growing unboundedly or bleeding out. */
   populationCapMultiplier: number;
+  /** Upper bound on `foodStored`. Once laying is satisfied and the colony is at its population
+   * target, food has no other sink, so without a cap deliveries pile it up without limit (an
+   * ever-growing "Food stored" stat and a maxed-out larder pile). A cap models finite larder
+   * space: surplus foragers still make trips, it just stops accumulating. */
+  foodStorageCap: number;
   /** Fraction of the starting population to pre-seed as in-progress brood (eggs/larvae/pupae
    * spread across all developmental stages) at init, so an established colony starts eclosing
    * new workers within the first minute rather than after a full ~20k-frame development lag —
@@ -258,8 +263,11 @@ export const defaultConfig: SimConfig = {
   framesPerDay: 300,
   antSizeRangeMm: [3.5, 5.0],
   antCallowMaturityDays: 5,
-  antLifespanMinDays: 120,
-  antLifespanMaxDays: 1100,
+  // extended so natural death is a calm background event, not constant churn: with ~1500 ants
+  // and death now a real removal (replaced by an eclosion from the nest, not an in-place
+  // respawn), a short lifespan meant ~1 death every frame or two scattered across the map
+  antLifespanMinDays: 500,
+  antLifespanMaxDays: 3000,
 
   antUndergroundFraction: 0.1,
   antUndergroundSpeed: 0.4,
@@ -274,10 +282,14 @@ export const defaultConfig: SimConfig = {
   larvaNutritionNeeded: 8,
   larvaFeedRatePerFrame: 0.01,
   pupaDurationDays: 18,
-  queenEggCooldownFramesRange: [200, 500],
+  // faster than before so homeostatic laying can actually keep pace with worker deaths and hold
+  // the colony steady (rather than slowly bleeding out); still gated by food and the committed-
+  // population target, so she only lays this fast while there are losses to replace
+  queenEggCooldownFramesRange: [60, 140],
   queenEggFoodCost: 5,
   queenEggRetryFrames: 60,
   populationCapMultiplier: 1.3,
+  foodStorageCap: 400,
   seededBroodFraction: 0.06,
   broodCarryNoticeRadius: 24,
   antUndergroundDutyDaysRange: [1, 3],
