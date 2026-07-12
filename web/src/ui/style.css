@@ -25,6 +25,7 @@ body {
 #app {
   display: flex;
   height: 100vh;
+  height: 100dvh; /* iOS Safari's collapsing address bar makes 100vh unreliable */
   width: 100vw;
   overflow: hidden;
 }
@@ -186,4 +187,65 @@ body {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* Phone-width layouts (portrait iPhone mini and up): a 150px side panel eats too much of a
+ * ~375px-wide screen, so below this width the panel becomes a compact bar docked under the
+ * sim view instead of squeezed in beside it. `order` (not markup order) does the flip so the
+ * DOM/tool-panel logic in ui/panel.ts doesn't need to know or care about layout. Deliberately
+ * placed at the end of the file: every selector here already exists above at equal specificity
+ * (`.panel-group`, `.tool-button`, ...), and CSS breaks specificity ties by source order — this
+ * has to come after those base rules or they silently win back at this same viewport width. */
+@media (max-width: 700px) {
+  #app {
+    flex-direction: column;
+  }
+
+  #canvas-host {
+    order: 1;
+    min-height: 0; /* let it shrink below its content size inside the flex column */
+  }
+
+  #panel {
+    order: 2;
+    width: 100%;
+    max-height: 34vh;
+    border-right: none;
+    border-top: 1px solid var(--panel-border);
+    padding: 6px 8px;
+    gap: 5px;
+  }
+
+  .panel-heading {
+    margin-top: 1px;
+    font-size: 10px;
+  }
+
+  /* every group (not just the ones already marked .panel-row) becomes a wrapping grid on
+   * mobile, so e.g. the tool list ("Pan view" / "Block" / "Grass" / ...) — a full-width single
+   * column on desktop, where vertical space is cheap — packs several-per-row instead, since the
+   * 34vh bar is the scarce dimension here. */
+  .panel-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .panel-group .tool-button {
+    /* no flex-grow: letting a wrapped row's buttons stretch to fill leftover space is exactly
+     * how a 3-per-row layout collapses back down to 2-per-row (each item happily grows past its
+     * basis to eat the slack) */
+    flex: 0 1 30%;
+  }
+
+  .tool-button {
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  .panel-checkbox,
+  .panel-stats,
+  .panel-algorithm {
+    font-size: 11px;
+  }
 }
