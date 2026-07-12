@@ -8,6 +8,19 @@ import { Simulation } from '../simulation';
 
 const cfg = { ...defaultConfig, mapMinX: -64, mapMinY: -64, mapMaxX: 64, mapMaxY: 64, mapGridSize: 16 };
 
+/** Deterministic, seeded stand-in for `Math.random()` (mulberry32) — for tests that need varied,
+ * realistic-looking randomness (not the constant 0.5 stub) without being flaky: real unseeded
+ * `Math.random()` makes a test's pass/fail depend on which run it happens to be. */
+function seededRandom(seed: number): () => number {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 describe('Simulation', () => {
   beforeEach(() => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
@@ -549,7 +562,10 @@ describe('Simulation', () => {
   });
 
   it('seeds an established colony with in-progress brood and starting food, so growth begins quickly', () => {
-    vi.restoreAllMocks(); // this test needs real randomness for the stage spread, not the 0.5 stub
+    // needs varied randomness for the stage spread, not the constant 0.5 stub — but real
+    // unseeded Math.random() made this test's pass/fail depend on which run it happened to be
+    // (flaky in CI); a fixed seed keeps the same varied-looking sequence every time.
+    vi.spyOn(Math, 'random').mockImplementation(seededRandom(42));
     const sim = new Simulation(defaultConfig, { randomizeGrid: false });
     sim.init(600);
 
