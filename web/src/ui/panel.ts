@@ -14,9 +14,7 @@ const TOOLS: Array<{ tool: Tool; label: string }> = [
   { tool: 'pan', label: 'Pan view' },
   { tool: 'block', label: 'Block' },
   { tool: 'grass', label: 'Grass' },
-  { tool: 'cave', label: 'Cave' },
   { tool: 'food', label: 'Food' },
-  { tool: 'portal', label: 'Portal' },
   { tool: 'ground', label: 'Remove' },
 ];
 

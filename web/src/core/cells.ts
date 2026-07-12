@@ -44,20 +44,31 @@ export class FoodCell implements Cell {
   readonly type = 'food';
   readonly foodType: FoodType;
   readonly nutrientsMax: number;
-  /** Remaining nutrients. Currently cosmetic/informational only — see class doc comment. */
+  /** Remaining nutrients. Only actually consumed (and thus depleting) for `perishable` food —
+   * the two main sources are effectively bottomless, but a corpse is a small finite meal. */
   nutrients: number;
+  /** True for corpse food: each pickup consumes a nutrient, and the cell is removed once empty
+   * (see `Simulation.interactionWithCells`). */
+  readonly perishable: boolean;
+  /** A dead ant left where it fell, foraged like any other food but finite and rendered as a
+   * corpse rather than a food blob. */
+  readonly isCorpse: boolean;
 
-  constructor(foodType: FoodType = 'honeydew') {
+  constructor(foodType: FoodType = 'honeydew', opts: { nutrients?: number; perishable?: boolean; isCorpse?: boolean } = {}) {
     this.foodType = foodType;
-    this.nutrientsMax = FOOD_NUTRIENTS_MAX[foodType];
+    this.nutrientsMax = opts.nutrients ?? FOOD_NUTRIENTS_MAX[foodType];
     this.nutrients = this.nutrientsMax;
+    this.perishable = opts.perishable ?? false;
+    this.isCorpse = opts.isCorpse ?? false;
   }
 
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'food') return;
+    if (this.perishable && this.nutrients <= 0) return; // picked clean; nothing left to take
     ant.cargo.count = ant.cargo.capacity;
     ant.maxLeadScore = 0; // receptive to any lead again for the new goal
     taskFound(ant, ctx.config, ctx.frame);
+    if (this.perishable) this.nutrients -= 1;
   }
 }
 

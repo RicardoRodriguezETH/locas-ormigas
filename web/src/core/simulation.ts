@@ -15,6 +15,7 @@ import {
 } from './ant';
 import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
+import { FoodCell, type FoodType } from './cells';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { UndergroundGrid } from './underground';
 import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, type Vector2 } from './vector';
@@ -24,20 +25,16 @@ export interface SimulationOptions {
   randomizeGrid?: boolean;
 }
 
-/** Base map: three staggered wall segments standing between the colony and two food sources,
- * forcing a zigzag detour rather than a beeline — enough to stress-test pathing and
- * pheromone-following without being a full labyrinth (a proper generated maze turned out to
- * be nearly unsolvable for any of the algorithms within a reasonable time). */
-const WALL_REGION_WIDTH = 18;
-const WALL_REGION_HEIGHT = 15;
-const WALL_GAP_SIZE = 3;
-/** X offsets (within the region) of the three wall columns, and whether each one's gap is at
- * the top or bottom — alternating, so ants have to weave through them. */
-const WALLS: ReadonlyArray<{ x: number; gapAtTop: boolean }> = [
-  { x: 4, gapAtTop: true },
-  { x: 9, gapAtTop: false },
-  { x: 14, gapAtTop: true },
+/** Base map: two food sources, each tucked inside a three-sided wall pocket that hides it from
+ * the nest so reaching it takes real foraging (weave around the pocket, then in through the gap)
+ * rather than a beeline — a light challenge for the pheromone systems without being a labyrinth.
+ * Grid coords, relative to the cave at (-6,-4). */
+const FOOD_SITES: ReadonlyArray<{ xg: number; yg: number; type: FoodType }> = [
+  { xg: 11, yg: -9, type: 'honeydew' }, // aphid trophobiosis, the carb staple
+  { xg: 9, yg: 11, type: 'prey' }, // protein
 ];
+const FOOD_POCKET_RADIUS = 3;
+const GRASS_PATCHES = 22;
 
 /** One point in `Simulation.history` — a cheap scalar snapshot for the stats overlay's trend
  * charts, sampled every `HISTORY_SAMPLE_INTERVAL_FRAMES` frames regardless of whether that
@@ -111,7 +108,7 @@ export class Simulation {
     const caveGy = -4;
     this.grid.seedCell('cave', caveGx, caveGy);
     this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
-    this.buildZigzagStressTestMap();
+    this.buildBaseMap(caveGx, caveGy);
     // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
     const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg } =
       this.undergroundGrid.seedStarterNest(caveGx, caveGy);
@@ -182,30 +179,60 @@ export class Simulation {
     this.grid.setCellAtWorld(type, worldPosition);
   }
 
-  /** Carves the three staggered wall segments into the grid, positioned relative to the
-   * configured map bounds (near the right edge, vertically centered), and seeds two food
-   * sources beyond the last wall at different heights so reaching either requires weaving
-   * through all three gaps rather than a beeline. */
-  private buildZigzagStressTestMap(): void {
-    const gridSize = this.config.mapGridSize;
-    const maxXg = Math.floor(this.config.mapMaxX / gridSize);
-    const originX = maxXg - WALL_REGION_WIDTH - 2;
-    const originY = -Math.floor(WALL_REGION_HEIGHT / 2);
+  /** Seeds the two food sources, each hidden inside a wall pocket, plus scattered grass. Grid
+   * coords are relative to the cave (passed in) so the layout tracks the nest. */
+  private buildBaseMap(caveXg: number, caveYg: number): void {
+    for (const site of FOOD_SITES) {
+      const fx = caveXg + site.xg;
+      const fy = caveYg + site.yg;
+      this.buildFoodPocket(fx, fy, caveXg, caveYg);
+      this.grid.seedCell('food', fx, fy, site.type);
+    }
+    this.seedGrassPatches();
+  }
 
-    for (const wall of WALLS) {
-      for (let y = 0; y < WALL_REGION_HEIGHT; y++) {
-        const inGap = wall.gapAtTop ? y < WALL_GAP_SIZE : y >= WALL_REGION_HEIGHT - WALL_GAP_SIZE;
-        if (!inGap) {
-          this.grid.get(originX + wall.x, originY + y).pass = false;
+  /** Walls three sides of a box around a food tile, leaving the gap on the edge facing *away*
+   * from the cave — so the food is obscured and an ant has to circle around the pocket and come
+   * in from the far side rather than walking straight to it. */
+  private buildFoodPocket(fx: number, fy: number, caveXg: number, caveYg: number): void {
+    const r = FOOD_POCKET_RADIUS;
+    // which border edge to leave open: the one on the far side of the food from the cave, along
+    // whichever axis the cave is further away on
+    const dxFromCave = fx - caveXg;
+    const dyFromCave = fy - caveYg;
+    const openAxisX = Math.abs(dxFromCave) >= Math.abs(dyFromCave);
+    const openSign = openAxisX ? Math.sign(dxFromCave) : Math.sign(dyFromCave);
+
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // border cells only
+        // leave a 3-cell gap centered on the open edge
+        const onOpenEdge = openAxisX
+          ? dx === openSign * r && Math.abs(dy) <= 1
+          : dy === openSign * r && Math.abs(dx) <= 1;
+        if (onOpenEdge) continue;
+        const cell = this.grid.get(fx + dx, fy + dy);
+        cell.pass = false;
+        cell.cell = null;
+      }
+    }
+  }
+
+  /** Scatters small grass patches (clusters, not lone tiles) across the open map for texture. */
+  private seedGrassPatches(): void {
+    const { minXg, maxXg, minYg, maxYg } = this.grid;
+    for (let i = 0; i < GRASS_PATCHES; i++) {
+      const cx = minXg + Math.floor(Math.random() * (maxXg - minXg + 1));
+      const cy = minYg + Math.floor(Math.random() * (maxYg - minYg + 1));
+      const spread = 1 + Math.floor(Math.random() * 3);
+      for (let dx = -spread; dx <= spread; dx++) {
+        for (let dy = -spread; dy <= spread; dy++) {
+          if (dx * dx + dy * dy <= spread * spread && Math.random() < 0.55) {
+            this.grid.seedGrass(cx + dx, cy + dy);
+          }
         }
       }
     }
-
-    // one honeydew source (aphid trophobiosis, the carb staple), one prey item (protein) —
-    // mirroring L. niger's real dual-resource foraging strategy rather than two identical tiles
-    const lastWallX = WALLS[WALLS.length - 1].x;
-    this.grid.seedCell('food', originX + lastWallX + 4, originY + 2, 'honeydew');
-    this.grid.seedCell('food', originX + lastWallX + 4, originY + WALL_REGION_HEIGHT - 3, 'prey');
   }
 
   update(): void {
@@ -262,8 +289,26 @@ export class Simulation {
    * the underground headcount accurate. */
   private settleDeadAnt(ant: Ant): void {
     if (ant.carriedBrood) ant.carriedBrood.beingCarried = false;
+    if (ant.fetchingBrood) ant.fetchingBrood.beingCarried = false; // release the claim so another nurse can take it
     if (ant.deliveringUnderground && ant.cargo.count > 0) this.foodStored += 1;
-    if (ant.layer === 'underground') this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
+    if (ant.layer === 'underground') {
+      this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
+    } else {
+      this.dropCorpse(ant);
+    }
+  }
+
+  /** Leaves a corpse where a surface ant died: a small, *finite* food source (unlike the two
+   * main sources) that foragers can carry off, after which it's picked clean and removed. Skips
+   * cells that already hold something important (a wall, the cave, another food) so a corpse
+   * never clobbers the map; landing on grass is fine to overwrite. */
+  private dropCorpse(ant: Ant): void {
+    const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
+    if (!this.grid.isInsideGrid(gx, gy)) return;
+    const cell = this.grid.get(gx, gy);
+    if (!cell.pass) return;
+    if (cell.cell && cell.cell.type !== 'grass') return;
+    cell.cell = new FoodCell('prey', { nutrients: this.config.corpseNutrients, perishable: true, isCorpse: true });
   }
 
   /** A length-of-underground-duty-shift in frames, drawn *continuously* across
@@ -289,21 +334,22 @@ export class Simulation {
     if (this.history.length > HISTORY_MAX_SAMPLES) this.history.shift();
   }
 
-  /** Underground behavior. Five modes, checked in order:
-   * 1. Carrying a delivery (`deliveringUnderground`): steer straight for the larder chamber
-   *    and deposit on arrival — see `beginUndergroundDelivery`.
+  /** Underground behavior. Modes, checked in order:
+   * 1. Carrying a delivery (`deliveringUnderground`): steer for the larder chamber and deposit
+   *    on arrival — see `beginUndergroundDelivery`.
    * 2. Carrying brood (`carriedBrood`): steer for the nursery chamber and settle it there on
-   *    arrival — see `tryPickUpBrood`/`stepBroodCarry`. Finishing a carry takes priority over
-   *    resurfacing, same as a food delivery does.
-   * 3. Already walking out (`headingToSurface`): keep following the route back to the entrance
+   *    arrival — see `stepBroodCarry`. Finishing a carry takes priority over resurfacing.
+   * 3. Fetching brood (`fetchingBrood`): walk to a claimed loose brood item, then pick it up and
+   *    switch to carrying it — see `tryBecomeNurse`/`stepFetchBrood`.
+   * 4. Already walking out (`headingToSurface`): keep following the route back to the entrance
    *    and resurface on arrival — see `beginHeadingToSurface`/`stepHeadToExit`.
-   * 4. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry):
+   * 5. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry/fetch):
    *    start walking back to the entrance rather than resurfacing instantly from wherever the
    *    ant happens to be — ants only ever cross layers by actually reaching the hole.
-   * 5. Otherwise, debugging-phase filler behavior: wander the dug tunnel network, opportunistically
-   *    picking up any loose brood passed along the way, and digging out the colony's current
-   *    designated site(s) if bumped into (see `UndergroundGrid.ensureDesignatedFrontier`) — no
-   *    pheromones, no rest cycle. Ants bumping into a plain, non-designated wall just turn away;
+   * 6. Loose brood exists: become a nurse and go fetch it (`tryBecomeNurse`).
+   * 7. Otherwise: wander the dug tunnel network, digging out the colony's current designated
+   *    site(s) if bumped into (see `UndergroundGrid.ensureDesignatedFrontier`) — no pheromones,
+   *    no rest cycle. Ants bumping into a plain, non-designated wall just turn away;
    *    they can't opportunistically eat through arbitrary dirt, only ever the colony's current
    *    designated growth site(s). */
   private stepUndergroundAnt(ant: Ant): void {
@@ -315,6 +361,10 @@ export class Simulation {
       this.stepBroodCarry(ant);
       return;
     }
+    if (ant.fetchingBrood) {
+      this.stepFetchBrood(ant);
+      return;
+    }
     if (ant.headingToSurface) {
       this.stepHeadToExit(ant);
       return;
@@ -323,7 +373,7 @@ export class Simulation {
       this.beginHeadingToSurface(ant);
       return;
     }
-    if (this.tryPickUpBrood(ant)) return; // starts carrying next frame
+    if (this.tryBecomeNurse(ant)) return; // walks to fetch the brood next frame
 
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
@@ -405,13 +455,15 @@ export class Simulation {
     }
   }
 
-  /** Opportunistically notices any loose brood (not already being carried, not yet at the
-   * nursery) within `broodCarryNoticeRadius` of a wandering underground ant and picks up the
-   * nearest one — like the rest of underground behavior, this is "stumble upon," not a
-   * colony-wide assignment system. Returns true if a carry was started this frame. */
-  private tryPickUpBrood(ant: Ant): boolean {
+  /** Turns an idle underground ant into a nurse: if any loose brood exists (laid at the queen,
+   * not yet moved to the nursery and not already claimed by another nurse), it claims the nearest
+   * one and starts walking to fetch it. Self-limiting — each brood item is claimed by exactly one
+   * nurse (via `beingCarried`), so the colony fields as many nurses as there is brood to move and
+   * no more, and eggs get relayed to the nursery promptly instead of piling up at the queen.
+   * Returns true if the ant became a nurse this frame. */
+  private tryBecomeNurse(ant: Ant): boolean {
     let nearest: Brood | null = null;
-    let nearestDist = this.config.broodCarryNoticeRadius;
+    let nearestDist = Infinity;
     for (const b of this.brood) {
       if (b.beingCarried || b.atNursery) continue;
       const d = distance(ant.position, b.position);
@@ -422,10 +474,30 @@ export class Simulation {
     }
     if (!nearest) return false;
 
+    // claim it: excludes it from other nurses, and (since eclosion is deferred while
+    // `beingCarried`) keeps it waiting at the queen until this nurse arrives to pick it up
     nearest.beingCarried = true;
-    ant.carriedBrood = nearest;
-    ant.broodCarryPath = this.undergroundGrid.findPath(ant.position, this.nurseryChamberPosition) ?? [];
+    ant.fetchingBrood = nearest;
+    ant.fetchPath = this.undergroundGrid.findPath(ant.position, nearest.position) ?? [];
     return true;
+  }
+
+  /** Walks a nurse to the loose brood it claimed, then takes it in its mandibles and switches to
+   * carrying it to the nursery. */
+  private stepFetchBrood(ant: Ant): void {
+    const brood = ant.fetchingBrood!;
+    if (brood.atNursery || !this.brood.includes(brood)) {
+      // it was settled or removed out from under us — abandon and go back to being idle
+      ant.fetchingBrood = null;
+      ant.fetchPath = [];
+      return;
+    }
+    if (this.followPath(ant, ant.fetchPath, this.config.antUndergroundSpeed)) {
+      ant.carriedBrood = brood;
+      ant.broodCarryPath = this.undergroundGrid.findPath(ant.position, this.nurseryChamberPosition) ?? [];
+      ant.fetchingBrood = null;
+      ant.fetchPath = [];
+    }
   }
 
   /** Carries `ant.carriedBrood` toward the nursery chamber, dragging its `position` along with
@@ -481,28 +553,17 @@ export class Simulation {
     }
   }
 
-  /** Ant has physically reached the entrance: pop out of the hole and resume foraging. Emerges a
-   * short distance out into the open rather than exactly on the cave tile so the colony doesn't
-   * visibly pile up on one point — but only onto a passable tile: an unchecked offset could drop
-   * the ant inside a wall (painted block, randomized rubble, the maze), which `fixTrapped` would
-   * then snap up to 100 units away, a visible teleport. Tries a few directions, falling back to
-   * the cave tile itself (always passable) if the surroundings are boxed in. */
+  /** Ant has physically reached the entrance: it emerges *at the cave hole* and walks outward.
+   * Deliberately placed right on the cave tile, not offset out into the open — a returning
+   * forager and (especially) a freshly-eclosed worker popping into existence a few tiles away
+   * from the nest read as ants randomly spawning around the colony. Coming out of the hole and
+   * walking out reads as what it is: emerging from the nest. The resting cluster already sits
+   * here, so briefly overlapping it is invisible. */
   private ascendToSurface(ant: Ant): void {
-    let emergePosition = { ...this.cavePosition };
-    let emergeDirection = fromAngle(Math.random() * Math.PI * 2);
-    for (let i = 0; i < 6; i++) {
-      const dir = fromAngle(Math.random() * Math.PI * 2);
-      const candidate = add(this.cavePosition, scale(dir, 50));
-      if (this.grid.canPass(candidate)) {
-        emergePosition = candidate;
-        emergeDirection = dir;
-        break;
-      }
-    }
     ant.layer = 'surface';
-    ant.position = emergePosition;
-    ant.direction = emergeDirection;
-    ant.speed = 0.1;
+    ant.position = { ...this.cavePosition };
+    ant.direction = fromAngle(Math.random() * Math.PI * 2); // walk out in some outward direction
+    ant.speed = this.config.antMaxSpeed * 0.5; // a little push so it clears the entrance
     ant.paused = false;
     ant.headingToSurface = false;
     ant.exitPath = [];
@@ -630,6 +691,10 @@ export class Simulation {
     cell.affectAnt(ant, { frame: this.frame, config: this.config });
     if (cell.type === 'food' || cell.type === 'cave') {
       ant.lastTimeSeen[cell.type] = this.frame;
+    }
+    // a corpse (or any perishable food) that's been picked clean disappears
+    if (cell.type === 'food' && (cell as FoodCell).perishable && (cell as FoodCell).nutrients <= 0) {
+      this.grid.removeCell(xg, yg);
     }
   }
 

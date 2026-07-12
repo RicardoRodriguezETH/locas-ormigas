@@ -93,10 +93,9 @@ export class WorldGrid {
         cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } },
       },
     };
-    if (randomize) {
-      if (Math.random() < 0.002) data.cell = new GrassCell();
-      if (Math.random() < 0.001) data.pass = false;
-    }
+    // light scattered grass for texture; no random blocks (those are placed deliberately as
+    // obstacles in `Simulation.buildBaseMap`, and stray ones were an ascend/spawn hazard)
+    if (randomize && Math.random() < 0.004) data.cell = new GrassCell();
     this.cells.set(this.key(xg, yg), data);
     return data;
   }
@@ -131,6 +130,13 @@ export class WorldGrid {
     const data = this.get(xg, yg);
     data.pass = true;
     data.cell = type === 'food' ? new FoodCell(foodType) : new CaveCell();
+  }
+
+  /** Places a decorative grass tile by grid coords, only on empty passable ground (won't paint
+   * over food/cave/walls). Used to seed grass patches at world init. */
+  seedGrass(xg: number, yg: number): void {
+    const data = this.get(xg, yg);
+    if (data.pass && !data.cell) data.cell = new GrassCell();
   }
 
   removeCell(xg: number, yg: number): void {

@@ -12,7 +12,7 @@ const IDEAL_CONTENT_HEIGHT = 720;
 const NUM_ANTS_DESKTOP = 1500;
 const NUM_ANTS_MOBILE = 600;
 /** Cell tools that only place one thing per click; dragging them would spam duplicates. */
-const CLICK_ONLY_TOOLS = new Set<Tool>(['cave', 'portal']);
+const CLICK_ONLY_TOOLS = new Set<Tool>([]);
 
 async function main(): Promise<void> {
   const canvasHost = document.getElementById('canvas-host') as HTMLDivElement;

@@ -99,6 +99,12 @@ export interface Ant {
   /** Remaining waypoints back to the entrance for the current exit, mirroring `deliveryPath`/
    * `broodCarryPath`. Empty when not heading to surface. */
   exitPath: Vector2[];
+  /** A loose brood item this ant has claimed and is walking *to* (to then pick up and carry to
+   * the nursery), if any — see `Simulation.stepUndergroundAnt`'s nurse branch. Distinct from
+   * `carriedBrood`, which is a brood already in its mandibles. Null the rest of the time. */
+  fetchingBrood: Brood | null;
+  /** Remaining waypoints to the claimed `fetchingBrood`, mirroring `broodCarryPath`. */
+  fetchPath: Vector2[];
 
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
@@ -152,6 +158,8 @@ export function createAnt(
     broodCarryPath: [],
     headingToSurface: false,
     exitPath: [],
+    fetchingBrood: null,
+    fetchPath: [],
 
     lookingFor: 'food',
     nextTask: 'cave',

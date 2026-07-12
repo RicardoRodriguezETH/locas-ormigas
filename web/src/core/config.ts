@@ -162,9 +162,8 @@ export interface SimConfig {
    *
    * Real ant colonies constantly relocate eggs/larvae/pupae between chambers by temperature/
    * humidity need (brood transport) — modeled as a one-way trip: newly-laid eggs sit at the
-   * queen's chamber until a wandering underground ant notices and carries them to the nursery
-   * chamber (see `broodCarryNoticeRadius` and `Simulation.stepUndergroundAnt`), then stay put
-   * for the rest of development. */
+   * queen's chamber until an idle underground ant becomes a nurse and carries them to the
+   * nursery chamber (see `Simulation.tryBecomeNurse`), then stay put for the rest of development. */
   eggDurationDays: number;
   /** Larvae need both age *and* accumulated feeding (`larvaNutritionNeeded`) to pupate — well-
    * fed brood develops faster in reality, but here it's a hard gate: underfed larvae just wait. */
@@ -191,16 +190,14 @@ export interface SimConfig {
    * ever-growing "Food stored" stat and a maxed-out larder pile). A cap models finite larder
    * space: surplus foragers still make trips, it just stops accumulating. */
   foodStorageCap: number;
+  /** Nutrients in the corpse a surface ant leaves when it dies — a small, finite food source
+   * (see `Simulation.dropCorpse`), picked clean after this many carry-offs. */
+  corpseNutrients: number;
   /** Fraction of the starting population to pre-seed as in-progress brood (eggs/larvae/pupae
    * spread across all developmental stages) at init, so an established colony starts eclosing
    * new workers within the first minute rather than after a full ~20k-frame development lag —
    * see `Simulation.seedEstablishedBrood`. */
   seededBroodFraction: number;
-  /** How close (world units) a wandering underground ant needs to pass to an un-carried,
-   * not-yet-nursery brood item to notice and pick it up — opportunistic, like the rest of the
-   * underground behavior, not a colony-wide "go fetch this specific egg" assignment. */
-  broodCarryNoticeRadius: number;
-
   /** A cargo-carrying ant reaching the surface cave always descends to physically deliver the
    * food to underground storage rather than it vanishing at the surface — the two layers are
    * one colony, not two disconnected populations. `antUndergroundDutyDaysRange` is how long it
@@ -290,14 +287,15 @@ export const defaultConfig: SimConfig = {
   queenEggRetryFrames: 60,
   populationCapMultiplier: 1.3,
   foodStorageCap: 400,
+  corpseNutrients: 20,
   seededBroodFraction: 0.06,
-  broodCarryNoticeRadius: 24,
   antUndergroundDutyDaysRange: [1, 3],
 
-  mapMinX: -350,
-  mapMinY: -250,
-  mapMaxX: 550,
-  mapMaxY: 350,
+  // a smaller, square play area (was a wide 900x600 rectangle)
+  mapMinX: -320,
+  mapMinY: -320,
+  mapMaxX: 320,
+  mapMaxY: 320,
   mapGridSize: 16,
 
   // half-life of roughly 3500 frames (~1min at 60fps): long enough to survive a full round
