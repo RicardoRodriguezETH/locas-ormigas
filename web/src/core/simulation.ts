@@ -35,6 +35,10 @@ const FOOD_SITES: ReadonlyArray<{ xg: number; yg: number; type: FoodType }> = [
 ];
 const FOOD_POCKET_RADIUS = 3;
 const GRASS_PATCHES = 22;
+/** 'gameplay' mode's founding colony size — see `Simulation.initGameplay`. A handful of workers
+ * rather than a literal lone ant: enough that early foraging isn't entirely hostage to one
+ * individual's random wander before anything can be found at all. */
+const GAMEPLAY_STARTING_ANTS = 5;
 
 /** One point in `Simulation.history` — a cheap scalar snapshot for the stats overlay's trend
  * charts, sampled every `HISTORY_SAMPLE_INTERVAL_FRAMES` frames regardless of whether that
@@ -100,8 +104,9 @@ export class Simulation {
   readonly undergroundGrid: UndergroundGrid;
   /** 'testing': an established colony (see `init`) with effectively-bottomless food, for
    * comparing pheromone algorithms on equal footing. 'gameplay' (see `initGameplay`): a true
-   * founding colony — the queen and one ant — with finite food, for actually playing. Purely
-   * informational to most of the simulation (both modes run the exact same update loop); only
+   * founding colony — the queen and a small starting party of workers — with finite food, for
+   * actually playing. Purely informational to most of the simulation (both modes run the exact
+   * same update loop); only
    * `WorldGrid.foodIsFinite` and the two init paths themselves read it. */
   gameMode: GameMode = 'testing';
   ants: Ant[] = [];
@@ -199,12 +204,13 @@ export class Simulation {
   }
 
   /** 'gameplay' mode: a true founding colony on the same prebuilt map/nest as `init`, instead of
-   * an established-colony snapshot — just the queen and one worker, no seeded brood, and finite
-   * food (`WorldGrid.foodIsFinite`). Everything from here on grows purely through the queen's
-   * own egg-laying. The reproduction cap still targets a *full-size* colony (`config.numAnts`),
-   * not literally "1.3x the one starting ant" — `initialPopulation` is the cap's basis (see
-   * `updateQueenAndBrood`), not a record of how many ants actually spawned, so it's set to the
-   * design target directly rather than to `this.ants.length`. */
+   * an established-colony snapshot — just the queen and a small starting party of workers, no
+   * seeded brood, and finite food (`WorldGrid.foodIsFinite`). Everything from here on grows
+   * purely through the queen's own egg-laying. The reproduction cap still targets a *full-size*
+   * colony (`config.numAnts`), not literally "1.3x the handful of starting ants" —
+   * `initialPopulation` is the cap's basis (see `updateQueenAndBrood`), not a record of how many
+   * ants actually spawned, so it's set to the design target directly rather than to
+   * `this.ants.length`. */
   initGameplay(): void {
     this.gameMode = 'gameplay';
     this.grid.foodIsFinite = true;
@@ -214,8 +220,14 @@ export class Simulation {
     this.foodStored = 0;
     this.history = [];
 
-    const direction = fromAngle(Math.random() * Math.PI * 2);
-    this.ants = [createAnt(this.config, { ...this.cavePosition }, direction, 0, 'surface')];
+    this.ants = [];
+    for (let i = 0; i < GAMEPLAY_STARTING_ANTS; i++) {
+      const direction = fromAngle(Math.random() * Math.PI * 2);
+      // a little scatter around the entrance rather than perfectly stacked, same idea as init's
+      // clustered surface spawn
+      const position = add(this.cavePosition, scale(direction, 2 + i));
+      this.ants.push(createAnt(this.config, position, direction, 0, 'surface'));
+    }
     this.undergroundAntCount = 0;
     this.initialPopulation = this.config.numAnts;
   }

@@ -613,13 +613,13 @@ describe('Simulation', () => {
   });
 
   describe('save/load', () => {
-    it('initGameplay seeds a true founding colony: one ant, the queen, no brood, finite food', () => {
+    it('initGameplay seeds a true founding colony: a handful of ants, the queen, no brood, finite food', () => {
       const sim = new Simulation(cfg, { randomizeGrid: false });
       sim.initGameplay();
 
       expect(sim.gameMode).toBe('gameplay');
-      expect(sim.ants).toHaveLength(1);
-      expect(sim.ants[0].layer).toBe('surface');
+      expect(sim.ants).toHaveLength(5);
+      expect(sim.ants.every((a) => a.layer === 'surface')).toBe(true);
       expect(sim.brood).toHaveLength(0);
       expect(sim.grid.foodIsFinite).toBe(true);
 
@@ -628,7 +628,7 @@ describe('Simulation', () => {
       expect(foodCell.perishable).toBe(true);
     });
 
-    it("initGameplay's population cap targets a full colony, not ~1.3x the single starting ant", () => {
+    it("initGameplay's population cap targets a full colony, not ~1.3x the small starting party", () => {
       vi.restoreAllMocks();
       const localCfg = { ...defaultConfig, numAnts: 50 };
       const sim = new Simulation(localCfg, { randomizeGrid: false });
