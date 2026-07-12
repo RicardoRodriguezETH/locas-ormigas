@@ -218,9 +218,10 @@ export interface SimConfig {
   pheromoneDepositAmount: number;
   /** Strength at which the debug overlay renders a tile at full intensity. */
   pheromoneSaturation: number;
-  /** 'legacy'/'gradient' only: how far (0-1) an ant rotates its heading toward the best local
-   * pheromone lead each communication. 1 = hard-snap onto the stored point (orbits it and
-   * stalls); low values glide the ant along the trail. See `communicatePheromonesScored`. */
+  /** How far (0-1) an ant rotates its heading toward the best local pheromone lead each
+   * communication, for all three algorithms. 1 = hard-snap (orbits a stored point and stalls
+   * for legacy/gradient; converges worse for flow too); low values glide the ant along the
+   * trail instead. See `communicatePheromonesScored`/`communicatePheromonesFlow`. */
   pheromoneLeadBlend: number;
   pheromoneAlgorithm: PheromoneAlgorithm;
 }

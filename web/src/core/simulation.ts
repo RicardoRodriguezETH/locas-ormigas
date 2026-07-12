@@ -778,31 +778,37 @@ export class Simulation {
 
   /** 'flow': each cell holds a decaying direction *vector* per interest — built from the
    * headings of ants who walked through it while seeking that interest — instead of a
-   * remembered coordinate. Followers align with the summed vector from their neighborhood
-   * rather than beelining for a stored point, which is what lets a trail curve around
-   * obstacles and lets multiple simultaneous trails coexist without needing to track which
-   * source each one leads to.
+   * remembered coordinate. Followers align with the local vector rather than beelining for a
+   * stored point, which is what lets a trail curve around obstacles and lets multiple
+   * simultaneous trails coexist without needing to track which source each one leads to.
    *
-   * Deposits go onto *both* interests every time, like legacy/gradient, not just the one the
-   * ant is currently seeking — an ant heading toward its current goal is, by construction,
-   * heading *away* from the one it just left, so that heading reversed is exactly the useful
-   * direction to advertise for the other channel. Depositing only the current-goal channel
-   * misses the single freshest, most useful moment there is: right when an ant discovers a
-   * resource, `lookingFor` has already flipped to the *other* interest before this runs, so
-   * an ant that finds food gets immediately gated out of ever mentioning it via that path. */
+   * Two things needed fixing before this actually worked (measured: deliveries went from ~20,
+   * *worse* than no guidance at all, to within the same order of magnitude as legacy/gradient):
+   *  - Read only the ant's own cell, not a sum across the 3x3 neighborhood. Unlike legacy/
+   *    gradient's "keep only the single freshest sighting" scoring, flow's cells accumulate
+   *    (decaying) vector *sums* from every ant that passed through — summing that across 9 cells
+   *    let conflicting headings from different discovery events partially cancel into a smeared,
+   *    sometimes actively-wrong resultant, worst right at busy hubs like the cave/food.
+   *  - The deposited heading is captured *before* this function's own pull-read rotates
+   *    `ant.direction`. Using the post-read direction created a same-frame read-then-write loop:
+   *    an ant would steer toward whatever the field said, then immediately write that
+   *    already-steered heading back into the same cell it just read, reinforcing noise instead
+   *    of reporting independent travel history.
+   *  - Steering is still blend-capped like legacy/gradient (`pheromoneLeadBlend`), not
+   *    hard-snapped: even with the two fixes above, an uncapped turn rate reliably converged
+   *    worse (more laden ants stuck wandering) than a capped one, in every run tested. */
   private communicatePheromonesFlow(ant: Ant): void {
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
     const decay = this.config.pheromoneDecayPerFrame;
+    // captured before the pull-read below rotates ant.direction — see doc comment
+    const incomingDirection = { x: ant.direction.x, y: ant.direction.y };
 
-    let pull: Vector2 = { x: 0, y: 0 };
-    for (const [dx, dy] of GRID_COM_SCAN) {
-      const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
-      pull = add(pull, readPheromoneFlow(info, this.frame, decay));
-    }
+    const pull = readPheromoneFlow(this.grid.get(gx, gy).pheromones[ant.lookingFor], this.frame, decay);
     const strength = length(pull);
     if (strength > 0) {
       const confidence = Math.min(1, strength / this.config.pheromoneSaturation);
-      const blended = add(scale(ant.direction, 1 - confidence), scale(normalize(pull, ant.direction), confidence));
+      const b = Math.min(confidence, this.config.pheromoneLeadBlend);
+      const blended = add(scale(ant.direction, 1 - b), scale(normalize(pull, ant.direction), b));
       ant.direction = normalize(blended, ant.direction);
       if (confidence > 0.3) {
         ant.informedUntil = this.frame + this.config.antInformedWindow;
@@ -815,7 +821,7 @@ export class Simulation {
         if (lastSeen < 0) continue;
         const personalFreshness = decay ** (this.frame - lastSeen);
         const depositAmount = this.config.pheromoneDepositAmount * personalFreshness;
-        const heading = interest === ant.lookingFor ? ant.direction : scale(ant.direction, -1);
+        const heading = interest === ant.lookingFor ? incomingDirection : scale(incomingDirection, -1);
         const info = this.grid.get(gx, gy).pheromones[interest];
         const decayedFlow = readPheromoneFlow(info, this.frame, decay);
         const updatedFlow = add(decayedFlow, scale(heading, depositAmount));

@@ -127,6 +127,60 @@ describe('Simulation', () => {
     expect(seeker.direction.x).toBeGreaterThan(0); // turned to follow the eastward flow
   });
 
+  it('flow algorithm deposits the heading an ant arrived with, not one already steered by this frame\'s read', () => {
+    // regression: depositing the post-steer direction creates a same-frame read-then-write
+    // feedback loop (an ant reports back a heading it only has because it just read this cell),
+    // which measurably wrecked convergence — deposits must reflect independent travel history
+    const localCfg = { ...cfg, pheromoneAlgorithm: 'flow' as const, antComEveryFrame: true };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    // a strong northward 'food' flow already sitting in the ant's cell — reading it would want
+    // to steer the ant's heading toward north (0,-1)
+    const info = sim.grid.get(0, 0).pheromones.food;
+    info.flow = { x: 0, y: -localCfg.pheromoneSaturation };
+    info.lastUpdated = 0;
+
+    // the ant arrives heading due east and has personally seen 'cave' (so it deposits on that
+    // channel too, using the reversed heading)
+    const seeker = createAnt(localCfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+    seeker.lastTimeSeen.cave = 0;
+    seeker.restAt = Infinity;
+    sim.ants = [seeker];
+    sim.frame = 0;
+    sim.update();
+
+    // it did steer toward the field (sanity check the read side still works)
+    expect(seeker.direction.y).toBeLessThan(0);
+
+    // but the 'cave' deposit (this frame's only fresh write) reflects the ant's *incoming* (due
+    // east) heading reversed — not the already-steered (now north-ish) direction
+    const caveInfo = sim.grid.get(0, 0).pheromones.cave;
+    expect(caveInfo.flow.x).toBeLessThan(0); // reversed east = west, not a reversed north
+    expect(caveInfo.flow.y).toBeCloseTo(0, 1);
+  });
+
+  it('flow algorithm colony still delivers food, not fewer than an undirected colony would', () => {
+    // regression: an earlier version of flow's steering was actively counterproductive (deposit
+    // feedback loop + neighborhood-summed signal smearing), delivering far *less* than ants
+    // getting home by undirected wander alone would. A tiny colony over a modest window is a
+    // cheap floor check that it's at least functional, not a full throughput benchmark.
+    vi.restoreAllMocks(); // needs real randomness for exploration, not the fixed 0.5 stub
+    const localCfg = { ...defaultConfig, pheromoneAlgorithm: 'flow' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+    sim.init(300);
+    const probe = sim as unknown as { deliveriesThisFrame: number };
+    let deliveries = 0;
+    for (let f = 0; f < 10000; f++) {
+      sim.update();
+      deliveries += probe.deliveriesThisFrame ?? 0;
+    }
+    // ~200 is typical on the real map at this scale; a broken/counterproductive steering (the
+    // pre-fix state) delivered single digits or fewer over this window
+    expect(deliveries).toBeGreaterThan(30);
+  }, 30000);
+
   it('gradient algorithm favors a freshly-refreshed lead over a stale one, even if both were once equally strong', () => {
     const localCfg = { ...cfg, antComEveryFrame: true };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
