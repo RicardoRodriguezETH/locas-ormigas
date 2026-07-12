@@ -8,6 +8,7 @@ describe('runPheromoneBenchmark', () => {
     expect(results.map((r) => r.algorithm)).toEqual(['legacy', 'gradient', 'flow', 'diffusion']);
     for (const r of results) {
       expect(r.deliveries).toBeGreaterThanOrEqual(0);
+      expect(r.deliveriesPerFrame).toBeCloseTo(r.deliveries / 50);
     }
   });
 

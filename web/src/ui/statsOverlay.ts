@@ -401,7 +401,7 @@ export class StatsOverlay {
     this.benchmarkResults = results;
     this.benchmarkRunning = false;
     this.benchmarkButton.disabled = false;
-    this.benchmarkStatus.textContent = 'Deliveries over a fixed simulated window, identical small colony, same map for all four.';
+    this.benchmarkStatus.textContent = 'Deliveries/frame over a fixed simulated window, identical small colony, same map for all four.';
     this.drawBenchmark();
   }
 
@@ -421,7 +421,7 @@ export class StatsOverlay {
       return;
     }
 
-    const maxDeliveries = Math.max(...this.benchmarkResults.map((r) => r.deliveries), 1);
+    const maxRate = Math.max(...this.benchmarkResults.map((r) => r.deliveriesPerFrame), 1e-9);
     const rowH = 28;
     const gap = 8;
     const leftPad = 90;
@@ -430,9 +430,9 @@ export class StatsOverlay {
     ctx.font = '12px sans-serif';
     ctx.textBaseline = 'middle';
 
-    this.benchmarkResults.forEach(({ algorithm, deliveries }, i) => {
+    this.benchmarkResults.forEach(({ algorithm, deliveriesPerFrame }, i) => {
       const y = i * (rowH + gap) + rowH / 2 + 4;
-      const barW = (deliveries / maxDeliveries) * barMaxW;
+      const barW = (deliveriesPerFrame / maxRate) * barMaxW;
 
       ctx.fillStyle = '#8b909a';
       ctx.textAlign = 'right';
@@ -443,7 +443,7 @@ export class StatsOverlay {
 
       ctx.fillStyle = '#d8dade';
       ctx.textAlign = 'left';
-      ctx.fillText(`${deliveries}`, leftPad + barW + 8, y);
+      ctx.fillText(deliveriesPerFrame.toFixed(4), leftPad + barW + 8, y);
     });
   }
 }

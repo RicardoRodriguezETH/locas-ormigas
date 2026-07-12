@@ -5,6 +5,10 @@ import { Simulation } from './simulation';
 export interface BenchmarkResult {
   algorithm: PheromoneAlgorithm;
   deliveries: number;
+  /** `deliveries / frames` — the primary comparison metric. Raw `deliveries` alone isn't
+   * comparable across differently-sized runs; this is what actually answers "which algorithm
+   * forages faster". */
+  deliveriesPerFrame: number;
 }
 
 export interface BenchmarkOptions {
@@ -31,7 +35,7 @@ function yieldToEventLoop(): Promise<void> {
  * simulation is currently on screen. Chunked with periodic yields so a several-second run
  * doesn't freeze the tab. */
 export async function runPheromoneBenchmark(options: BenchmarkOptions = {}): Promise<BenchmarkResult[]> {
-  const frames = options.frames ?? 6000;
+  const frames = options.frames ?? 20000;
   const antCount = options.antCount ?? 300;
   const results: BenchmarkResult[] = [];
 
@@ -48,7 +52,7 @@ export async function runPheromoneBenchmark(options: BenchmarkOptions = {}): Pro
       }
     }
     options.onProgress?.(algorithm, frames, frames);
-    results.push({ algorithm, deliveries: sim.totalDeliveries });
+    results.push({ algorithm, deliveries: sim.totalDeliveries, deliveriesPerFrame: sim.totalDeliveries / frames });
   }
 
   return results;
