@@ -9,6 +9,7 @@ import {
   pause,
   randomInRange,
   taskFound,
+  unpause,
   updateActivityCycle,
   updateAnt,
   updateRestingMovement,
@@ -28,12 +29,29 @@ export interface SimulationOptions {
 /** Base map: two food sources, each tucked inside a three-sided wall pocket that hides it from
  * the nest so reaching it takes real foraging (weave around the pocket, then in through the gap)
  * rather than a beeline — a light challenge for the pheromone systems without being a labyrinth.
- * Grid coords, relative to the cave at (-6,-4). */
+ * Grid coords, relative to the cave at (-6,-4). 'testing' mode only — see `FOOD_SITES_GAMEPLAY`
+ * for why 'gameplay' doesn't reuse this directly. */
 const FOOD_SITES: ReadonlyArray<{ xg: number; yg: number; type: FoodType }> = [
   { xg: 11, yg: -9, type: 'honeydew' }, // aphid trophobiosis, the carb staple
   { xg: 9, yg: 11, type: 'prey' }, // protein
 ];
 const FOOD_POCKET_RADIUS = 3;
+/** 'gameplay' mode's own, closer food placement — same two-pocket idea as `FOOD_SITES`, just
+ * scaled down. `init`'s ~225-1500 active scouts blanket the full-size map fast enough that a
+ * ~14-cell hike to a 3-cell-radius pocket barely registers; a 5-ant founding party is a much
+ * thinner search net over the same area. Measured empirically across 12 independent runs on the
+ * unscaled map: 2/12 never found either food source at all in 300,000 frames (~83 simulated
+ * minutes), most of the rest found food only once or twice and were still net *losing*
+ * population (too little, too late relative to natural attrition) by the same mark — the
+ * search phase itself, not the return trip this file's other small-colony fixes address, was
+ * the dominant bottleneck. Halving the distance and shrinking the pocket keeps the same
+ * "circle around, enter from the gap" shape of challenge while cutting the area a founding
+ * party has to blanket before its first ant gets lucky. */
+const FOOD_SITES_GAMEPLAY: ReadonlyArray<{ xg: number; yg: number; type: FoodType }> = [
+  { xg: 6, yg: -5, type: 'honeydew' },
+  { xg: 5, yg: 6, type: 'prey' },
+];
+const FOOD_POCKET_RADIUS_GAMEPLAY = 2;
 const GRASS_PATCHES = 22;
 /** 'gameplay' mode's founding colony size — see `Simulation.initGameplay`. A handful of workers
  * rather than a literal lone ant: enough that early foraging isn't entirely hostage to one
@@ -149,6 +167,12 @@ export class Simulation {
    * frame from the just-updated grid, used by the *next* frame's activity-cycle checks (same
    * one-frame lag as `foragingThrottle`, negligible at 60fps). */
   caveFoodSignal = 0;
+
+  /** Whether the colony is at or below `antSmallColonyThreshold` this frame — recomputed once per
+   * frame in `update()`, read by both the rest-suppression check and `applySmallColonyHoming`
+   * below. See `SimConfig.antSmallColonyThreshold`'s doc comment for why a founding colony needs
+   * both. */
+  private smallColony = false;
 
   /** Rolling history for the stats overlay's trend charts — see `HistorySample`. */
   history: HistorySample[] = [];
@@ -278,12 +302,17 @@ export class Simulation {
   }
 
   /** Seeds the two food sources, each hidden inside a wall pocket, plus scattered grass. Grid
-   * coords are relative to the cave (passed in) so the layout tracks the nest. */
+   * coords are relative to the cave (passed in) so the layout tracks the nest. 'gameplay' uses
+   * its own closer, smaller-pocket layout (see `FOOD_SITES_GAMEPLAY`'s doc comment) rather than
+   * `FOOD_SITES` — 'testing' keeps the original map untouched so existing benchmarks are
+   * unaffected. */
   private buildBaseMap(caveXg: number, caveYg: number): void {
-    for (const site of FOOD_SITES) {
+    const sites = this.gameMode === 'gameplay' ? FOOD_SITES_GAMEPLAY : FOOD_SITES;
+    const pocketRadius = this.gameMode === 'gameplay' ? FOOD_POCKET_RADIUS_GAMEPLAY : FOOD_POCKET_RADIUS;
+    for (const site of sites) {
       const fx = caveXg + site.xg;
       const fy = caveYg + site.yg;
-      this.buildFoodPocket(fx, fy, caveXg, caveYg);
+      this.buildFoodPocket(fx, fy, caveXg, caveYg, pocketRadius);
       this.grid.seedCell('food', fx, fy, site.type);
     }
     this.seedGrassPatches();
@@ -292,8 +321,7 @@ export class Simulation {
   /** Walls three sides of a box around a food tile, leaving the gap on the edge facing *away*
    * from the cave — so the food is obscured and an ant has to circle around the pocket and come
    * in from the far side rather than walking straight to it. */
-  private buildFoodPocket(fx: number, fy: number, caveXg: number, caveYg: number): void {
-    const r = FOOD_POCKET_RADIUS;
+  private buildFoodPocket(fx: number, fy: number, caveXg: number, caveYg: number, r: number): void {
     // which border edge to leave open: the one on the far side of the food from the cave, along
     // whichever axis the cave is further away on
     const dxFromCave = fx - caveXg;
@@ -337,6 +365,9 @@ export class Simulation {
     this.deliveriesThisFrame = 0;
     let dead: Set<Ant> | null = null;
 
+    // see antSmallColonyThreshold's doc comment: a colony this small can't spare anyone resting.
+    this.smallColony = this.ants.length <= this.config.antSmallColonyThreshold;
+
     for (const ant of this.ants) {
       advanceAge(ant, this.config);
       if (ant.ageDays >= ant.naturalLifespanDays) {
@@ -361,10 +392,18 @@ export class Simulation {
 
       // 'legacy' faithfully never rests — the original's ant.pause() exists but its only call
       // site is commented out, so its ants forage continuously forever. Skipping the activity
-      // cycle entirely leaves `ant.paused` at its permanent default of false.
-      if (this.config.pheromoneAlgorithm !== 'legacy') {
+      // cycle entirely leaves `ant.paused` at its permanent default of false. A small colony
+      // (see antSmallColonyThreshold) gets the same treatment for a different reason: it can't
+      // spare anyone resting, and force-wakes anyone already paused rather than just skipping
+      // the cycle, so a colony that shrinks *into* "small" mid-rest doesn't orphan that ant.
+      if (this.smallColony) {
+        if (ant.paused) unpause(ant);
+      } else if (this.config.pheromoneAlgorithm !== 'legacy') {
         const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
         updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal, isCallow);
+      }
+      if (this.smallColony && this.gameMode === 'gameplay' && this.config.pheromoneAlgorithm !== 'legacy') {
+        this.applySmallColonyStuckEscape(ant);
       }
       if (ant.paused) {
         this.stepRestingAnt(ant);
@@ -823,13 +862,67 @@ export class Simulation {
   private communicatePheromones(ant: Ant): void {
     if (this.config.pheromoneAlgorithm === 'legacy') {
       this.communicatePheromonesClassic(ant);
-    } else if (this.config.pheromoneAlgorithm === 'flow') {
+      return;
+    }
+    if (this.config.pheromoneAlgorithm === 'flow') {
       this.communicatePheromonesFlow(ant);
     } else if (this.config.pheromoneAlgorithm === 'diffusion') {
       this.communicatePheromonesDiffusion(ant);
     } else {
       this.communicatePheromonesScored(ant);
     }
+    if (this.smallColony && this.gameMode === 'gameplay') this.applySmallColonyHoming(ant);
+  }
+
+  /** See `SimConfig.antSmallColonyHomingBlend`'s doc comment for why this exists and how tightly
+   * it's scoped. A deliberately crude path-integration stand-in: nudge a cargo-carrying ant's
+   * heading toward the literal, always-known cave position every communication tick, on top of
+   * whatever the active algorithm above already steered it toward — but ONLY when the straight
+   * line to the cave is actually walkable (see `hasLineOfSightToCave`). Both food pockets (see
+   * `buildFoodPocket`) deliberately leave their gap on the side *facing away* from the cave, so
+   * an ant standing at the food tile has a wall, not open ground, directly between it and the
+   * cave; an unconditional pull was measured empirically pinning laden ants right against that
+   * near wall indefinitely (repeatedly steering into the one wall segment with no gap) instead of
+   * first backing out through the far-side gap the way it came in — worse than no pull at all.
+   * Gating on line of sight means the pull stays inert while boxed in and only engages once the
+   * ant's own object-avoidance/wander has actually cleared the obstacle, at which point it's
+   * exactly the "final approach" nudge it's meant to be. */
+  private applySmallColonyHoming(ant: Ant): void {
+    if (ant.lookingFor !== 'cave') return;
+    if (!this.hasLineOfSightToCave(ant.position)) return;
+    const toward = directionTo(ant.position, this.cavePosition, ant.direction);
+    const b = this.config.antSmallColonyHomingBlend;
+    ant.direction = normalize(add(scale(ant.direction, 1 - b), scale(toward, b)), ant.direction);
+  }
+
+  /** Coarse straight-line walkability check from `from` to `cavePosition`: samples points along
+   * the segment roughly one grid cell apart and rejects if any lands on an impassable tile. Not a
+   * true continuous raycast (a thin diagonal wall could in principle slip between samples), but
+   * more than precise enough at the sub-grid-cell sampling density used here for the pocket walls
+   * this exists to detect. */
+  private hasLineOfSightToCave(from: Vector2): boolean {
+    const d = distance(from, this.cavePosition);
+    if (d < 1) return true;
+    const steps = Math.ceil(d / this.config.mapGridSize);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const p = { x: from.x + (this.cavePosition.x - from.x) * t, y: from.y + (this.cavePosition.y - from.y) * t };
+      if (!this.grid.canPass(p)) return false;
+    }
+    return true;
+  }
+
+  /** See `SimConfig.antStuckCheckFrames`'s doc comment for why this exists. Runs once per ant per
+   * frame (cheap: one distance check, only every `antStuckCheckFrames` frames actually compares
+   * anything) rather than being tied to the pheromone communication cadence — a stuck ant is
+   * stuck regardless of whether it happened to communicate recently. */
+  private applySmallColonyStuckEscape(ant: Ant): void {
+    if (this.frame - ant.stuckCheckFrame < this.config.antStuckCheckFrames) return;
+    if (distance(ant.position, ant.stuckCheckPosition) < this.config.antStuckCheckDistance) {
+      ant.direction = fromAngle(Math.random() * Math.PI * 2);
+    }
+    ant.stuckCheckPosition = { ...ant.position };
+    ant.stuckCheckFrame = this.frame;
   }
 
   /** 'legacy': a literal, deliberately-unfixed port of the original Löve2D/Lua game's pheromone

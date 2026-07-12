@@ -68,6 +68,12 @@ export interface Ant {
   comEvery: number;
   comEveryOffset: number;
 
+  /** Small colonies only (see `SimConfig.antStuckCheckFrames`) — position/frame this ant was last
+   * checked for making forward progress, and given a fresh random heading if it wasn't. See
+   * `Simulation.applySmallColonyStuckEscape`. */
+  stuckCheckPosition: Vector2;
+  stuckCheckFrame: number;
+
   /** Which overlay this ant currently lives/acts on. */
   layer: AntLayer;
   /** Frame this ant should resurface, if currently underground on a temporary duty shift
@@ -192,6 +198,9 @@ export function createAnt(
 
     comEvery: cfg.antComNeedFrameStep[0] + Math.floor(Math.random() * (cfg.antComNeedFrameStep[1] - cfg.antComNeedFrameStep[0] + 1)),
     comEveryOffset: Math.floor(Math.random() * cfg.antComNeedFrameStep[1]) + 1,
+
+    stuckCheckPosition: { ...position },
+    stuckCheckFrame: 0,
 
     size: cfg.antSizeRangeMm[0] + Math.random() * (cfg.antSizeRangeMm[1] - cfg.antSizeRangeMm[0]),
     ageDays: initialAgeDays,
