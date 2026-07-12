@@ -109,6 +109,12 @@ async function main(): Promise<void> {
     },
   });
   panel.setSelectedAlgorithm(defaultConfig.pheromoneAlgorithm);
+  // `resizeTo: canvasHost` took its first snapshot back at app.init(), before the panel above had
+  // any content — on the mobile stacked layout the panel's height is content-driven, so that
+  // snapshot was of a not-yet-final canvas-host box (its empty panel sibling briefly ceded it
+  // nearly the whole column). Force one correction now that the real panel height exists.
+  app.renderer.resize(canvasHost.clientWidth, canvasHost.clientHeight);
+  updateContentScale();
 
   const paintAt = (clientX: number, clientY: number) => {
     const rect = app.canvas.getBoundingClientRect();
