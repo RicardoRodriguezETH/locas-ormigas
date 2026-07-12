@@ -71,7 +71,9 @@ export class FoodCell implements Cell {
     if (ant.lookingFor !== 'food') return;
     if (this.perishable && this.nutrients <= 0) return; // picked clean; nothing left to take
     ant.cargo.count = ant.cargo.capacity;
-    ant.maxLeadScore = 0; // receptive to any lead again for the new goal
+    // 'legacy' faithfully never resets this (see Simulation.communicatePheromonesClassic) — every
+    // other algorithm resets it because a fresh goal deserves to be receptive to any lead again.
+    if (ctx.config.pheromoneAlgorithm !== 'legacy') ant.maxLeadScore = 0;
     taskFound(ant, ctx.config, ctx.frame);
     if (this.perishable) this.nutrients -= 1;
   }
@@ -85,7 +87,8 @@ export class CaveCell implements Cell {
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'cave') return;
     ant.cargo.count = 0;
-    ant.maxLeadScore = 0; // receptive to any lead again for the new goal
+    // see the matching comment in FoodCell.affectAnt
+    if (ctx.config.pheromoneAlgorithm !== 'legacy') ant.maxLeadScore = 0;
     taskFound(ant, ctx.config, ctx.frame);
   }
 }

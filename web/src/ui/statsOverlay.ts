@@ -5,15 +5,17 @@ import type { Simulation } from '../core/simulation';
 
 const ALGORITHM_LABELS: Record<PheromoneAlgorithm, string> = {
   legacy: 'Legacy',
+  'legacy+': 'Legacy+',
   gradient: 'Gradient',
   flow: 'Flow',
   diffusion: 'Diffusion',
 };
 
-/** Reuses the history charts' existing palette (population/food/throttle) plus one neutral grey,
- * rather than inventing a fifth color scheme just for this chart. */
+/** Reuses the history/activity charts' existing palette rather than inventing a new color
+ * scheme just for this chart. */
 const ALGORITHM_COLORS: Record<PheromoneAlgorithm, string> = {
   legacy: '#8b909a',
+  'legacy+': '#b98cd6',
   gradient: '#3799bb',
   flow: '#4caf7d',
   diffusion: '#e8a33d',
@@ -121,7 +123,7 @@ export class StatsOverlay {
     benchmarkStatus.textContent = 'Runs all four algorithms on an identical small colony and compares delivery throughput.';
     benchmarkControls.append(benchmarkButton, benchmarkStatus);
     root.appendChild(benchmarkControls);
-    const [benchmarkCanvas, benchmarkCtx] = this.makeCanvas(480, 160);
+    const [benchmarkCanvas, benchmarkCtx] = this.makeCanvas(480, 195);
     root.appendChild(benchmarkCanvas);
     this.benchmarkButton = benchmarkButton;
     this.benchmarkStatus = benchmarkStatus;

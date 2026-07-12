@@ -225,9 +225,98 @@ describe('Simulation', () => {
   it('diffusion algorithm colony delivers food, not fewer than an undirected colony would', () => {
     // same floor-check rationale as the 'flow' throughput test above: cheap regression guard,
     // not a benchmark. Measured empirically (see config.ts's diffusionDecayPerStep doc comment)
-    // to comfortably outperform 'legacy' on the stress-test map at these tuned defaults.
+    // to comfortably outperform 'legacy+' on the stress-test map at these tuned defaults.
     vi.restoreAllMocks();
     const localCfg = { ...defaultConfig, pheromoneAlgorithm: 'diffusion' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+    sim.init(300);
+    const probe = sim as unknown as { deliveriesThisFrame: number };
+    let deliveries = 0;
+    for (let f = 0; f < 10000; f++) {
+      sim.update();
+      deliveries += probe.deliveriesThisFrame ?? 0;
+    }
+    expect(deliveries).toBeGreaterThan(30);
+  }, 30000);
+
+  it("legacy algorithm (true original): steers by hard-snapping straight onto the lead, no blend", () => {
+    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'legacy' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    const scout = createAnt(localCfg, { x: 5, y: 5 }, { x: 1, y: 0 });
+    scout.speed = 0;
+    scout.lookingFor = 'cave';
+    scout.lastTimeSeen.food = 50;
+    scout.oldestPositionRemembered = { x: 100, y: 100 };
+
+    const seeker = createAnt(localCfg, { x: 20, y: 5 }, { x: -1, y: 0 }); // heading west, away from the lead
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+
+    sim.ants = [scout, seeker];
+    sim.frame = 60;
+    sim.update();
+
+    // heading becomes *exactly* the direction to the lead, not just rotated toward it
+    const toward = { x: 80 / Math.hypot(80, 95), y: 95 / Math.hypot(80, 95) };
+    expect(seeker.direction.x).toBeCloseTo(toward.x, 5);
+    expect(seeker.direction.y).toBeCloseTo(toward.y, 5);
+  });
+
+  it('legacy algorithm: a persistent high-water mark blocks re-steering toward any weaker lead, even a fresher one', () => {
+    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'legacy' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: 1 });
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+    seeker.maxLeadScore = 500; // already locked onto a strong lead from earlier in the run
+
+    const weakerButFresher = sim.grid.get(1, 0).pheromones.food;
+    weakerButFresher.time = 100; // a higher (more recent) frame number than 500 is impossible here...
+    weakerButFresher.where = { x: 1000, y: 0 };
+
+    sim.ants = [seeker];
+    sim.frame = 600;
+    sim.update();
+
+    // ...the point is score (raw frame-time), not recency: 100 < 500 never clears the gate
+    expect(seeker.maxLeadScore).toBe(500);
+    expect(seeker.direction).toEqual({ x: 0, y: 1 }); // heading untouched
+  });
+
+  it('legacy algorithm: unlike every other algorithm, never resets the high-water mark on a goal switch', () => {
+    const sim = new Simulation({ ...cfg, pheromoneAlgorithm: 'legacy' as const }, { randomizeGrid: false });
+    sim.grid.seedCell('food', 0, 0);
+
+    const ant = createAnt(cfg, { x: 8, y: 8 }, { x: 1, y: 0 });
+    ant.speed = 0;
+    ant.lookingFor = 'food';
+    ant.maxLeadScore = 999;
+    sim.ants = [ant];
+    sim.update(); // steps onto the food, completing the goal switch
+
+    expect(ant.lookingFor).toBe('cave');
+    expect(ant.maxLeadScore).toBe(999); // untouched
+  });
+
+  it('legacy algorithm: ants never enter the rest/idle cycle, unlike every other algorithm', () => {
+    vi.restoreAllMocks();
+    const localCfg = { ...defaultConfig, pheromoneAlgorithm: 'legacy' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+    sim.init(20);
+
+    for (let f = 0; f < 100; f++) sim.update();
+
+    expect(sim.ants.some((a) => a.paused)).toBe(false);
+  });
+
+  it('legacy algorithm colony still delivers food, not fewer than an undirected colony would', () => {
+    // deliberately the weakest of the five (see PheromoneAlgorithm's doc comment) — this is a
+    // cheap floor check that the deliberately-unfixed original still forages at all, not a
+    // benchmark. ~130-150 is typical on the stress-test map at this scale.
+    vi.restoreAllMocks();
+    const localCfg = { ...defaultConfig, pheromoneAlgorithm: 'legacy' as const };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
     sim.init(300);
     const probe = sim as unknown as { deliveriesThisFrame: number };
@@ -274,8 +363,8 @@ describe('Simulation', () => {
     expect(decayedLater).toBeGreaterThan(0);
   });
 
-  it('legacy algorithm: steers toward the freshest known lead by its raw frame-time, with no decay', () => {
-    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'legacy' as const };
+  it('legacy+ algorithm: steers toward the freshest known lead by its raw frame-time, with no decay', () => {
+    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'legacy+' as const };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
 
     // a scout deposits a 'food' lead pointing at {100,100} into cell (0,0)

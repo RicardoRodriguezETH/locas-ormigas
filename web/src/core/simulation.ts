@@ -146,8 +146,10 @@ export class Simulation {
       ant.ageDays = Math.random() * ant.naturalLifespanDays;
       // only a small scouting party starts out foraging — the rest of the colony stays put at
       // the nest until recruited by a real trail (caveFoodSignal, see update()), with this long
-      // range purely as a fallback so the colony isn't dormant forever if nothing is ever found
-      if (!isUnderground && Math.random() >= this.config.antInitialActiveFraction) {
+      // range purely as a fallback so the colony isn't dormant forever if nothing is ever found.
+      // Part of the same activity-cycle system 'legacy' skips entirely (see update()) — pausing
+      // any of its ants here would leave them stuck forever, since nothing ever unpauses them.
+      if (!isUnderground && this.config.pheromoneAlgorithm !== 'legacy' && Math.random() >= this.config.antInitialActiveFraction) {
         pause(ant, 0, randomInRange(this.config.antInitialRestDurationRange));
       }
       this.ants.push(ant);
@@ -265,8 +267,13 @@ export class Simulation {
         continue;
       }
 
-      const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
-      updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal, isCallow);
+      // 'legacy' faithfully never rests — the original's ant.pause() exists but its only call
+      // site is commented out, so its ants forage continuously forever. Skipping the activity
+      // cycle entirely leaves `ant.paused` at its permanent default of false.
+      if (this.config.pheromoneAlgorithm !== 'legacy') {
+        const eligibleToRest = ant.cargo.count === 0 && distance(ant.position, this.cavePosition) <= this.config.antRestTetherRadius;
+        updateActivityCycle(ant, this.config, this.frame, eligibleToRest, this.foragingThrottle, this.caveFoodSignal, isCallow);
+      }
       if (ant.paused) {
         this.stepRestingAnt(ant);
       } else {
@@ -722,7 +729,9 @@ export class Simulation {
   /** Ants never talk to each other directly; they leave/read pheromone info on the grid cell
    * they're standing on. Dispatches to whichever algorithm is configured. */
   private communicatePheromones(ant: Ant): void {
-    if (this.config.pheromoneAlgorithm === 'flow') {
+    if (this.config.pheromoneAlgorithm === 'legacy') {
+      this.communicatePheromonesClassic(ant);
+    } else if (this.config.pheromoneAlgorithm === 'flow') {
       this.communicatePheromonesFlow(ant);
     } else if (this.config.pheromoneAlgorithm === 'diffusion') {
       this.communicatePheromonesDiffusion(ant);
@@ -731,32 +740,63 @@ export class Simulation {
     }
   }
 
-  /** 'legacy' and 'gradient': both share the same "snap directly to whichever nearby cell
+  /** 'legacy': a literal, deliberately-unfixed port of the original Löve2D/Lua game's pheromone
+   * algorithm (`sim.algorithm_pheromones` in the original `code/simulation.lua`) — the true
+   * baseline every other algorithm here departed from, kept around specifically so 'legacy' vs
+   * 'legacy+' can benchmark how much all of that departure was actually worth. Three things,
+   * all still present, all later identified as the problem and fixed for everything else:
+   *  - Steering is the original's `ant.headTo(...)`: hard-snap straight onto the remembered lead
+   *    point, no blend cap.
+   *  - Re-steering is gated by `maxLeadScore` (the original's `ant.maxTimeSeen`) — a per-ant
+   *    high-water mark that only ever rises, and is *never* reset (not even on a goal switch;
+   *    see the `pheromoneAlgorithm !== 'legacy'` guards in `FoodCell`/`CaveCell.affectAnt`).
+   *    Once an ant has locked onto a strong enough lead, anything weaker becomes permanently
+   *    invisible to it — this is the exact "went effectively deaf, drifted home by random walk"
+   *    mechanic `communicatePheromonesScored`'s doc comment describes fixing. Left in on purpose
+   *    here, not a bug.
+   *  - No blend, no scout-vs-recruited erratic-wander split (`informedUntil` is never touched
+   *    here, so `updateAnt` always falls through to the single constant `antErraticSearching`,
+   *    matching the original's one `cfg.antErratic`), and no rest/idle cycle — see the
+   *    `updateActivityCycle` guard in `update()`; the original's `ant.pause()` exists but its
+   *    only call site is commented out, so its ants forage continuously forever. */
+  private communicatePheromonesClassic(ant: Ant): void {
+    const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
+
+    for (const [dx, dy] of GRID_COM_SCAN) {
+      const info = this.grid.get(gx + dx, gy + dy).pheromones[ant.lookingFor];
+      if (info.time > ant.maxLeadScore) {
+        ant.maxLeadScore = info.time;
+        ant.direction = directionTo(ant.position, info.where, ant.direction);
+      }
+    }
+
+    this.depositRawFrameTime(ant, gx, gy);
+  }
+
+  /** 'legacy+' and 'gradient': both share the same "snap directly to whichever nearby cell
    * scores best, and only overwrite a cell if you'd raise its score" mechanic — that decisive,
    * immediate-commitment behavior is what makes it work. They differ only in what "score"
    * means:
-   *  - 'legacy': raw frame-time. A lead is exactly as good as it ever was until something
+   *  - 'legacy+': raw frame-time. A lead is exactly as good as it ever was until something
    *    newer replaces it — simple, but stale leads can linger and mislead indefinitely.
    *  - 'gradient': frame-time run through exponential decay, so a lead quietly loses
    *    authority the longer it goes unrefreshed, and an ant's own contribution is scaled by
    *    how recently *it* personally confirmed the resource. This is the one piece of realism
-   *    (evaporation) the original was missing, without touching the mechanic that actually
-   *    makes foraging work. */
+   *    (evaporation) 'legacy+' was missing, without touching the mechanic that actually makes
+   *    foraging work.
+   *
+   * Both are 'legacy' (see `communicatePheromonesClassic`) with the two fixes that mattered
+   * most, measured: recompute the *current* best lead in the neighborhood every communication
+   * instead of gating on a persistent high-water mark that goes stale and never resets (an ant
+   * went effectively deaf to the field after its first commit and drifted home by random walk —
+   * trails never tightened, laden ants stayed spread ~150u from the ideal line), and steer by
+   * BLENDING toward it instead of hard-snapping (hard-snapping onto a point only ~1 cell back
+   * makes ants orbit that point and stall — with re-evaluation on, throughput collapsed;
+   * blending a fraction of the way there each cycle glides the ant along the trail instead). */
   private communicatePheromonesScored(ant: Ant): void {
     const useDecay = this.config.pheromoneAlgorithm === 'gradient';
     const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
 
-    // Re-evaluate the *current* best lead in the neighborhood every communication, then steer by
-    // BLENDING toward it rather than hard-snapping. Two deliberate departures from the original,
-    // both needed for trails to actually converge (measured):
-    //  - The original anchored to a persistent `maxLeadScore` high-water mark and only re-steered
-    //    on a strictly-fresher lead, so an ant went effectively deaf to the field after its first
-    //    commit and drifted home by random walk — trails never tightened (laden ants stayed
-    //    spread ~150u from the ideal line). Recomputing the best local lead each cycle keeps ants
-    //    actually following the trail.
-    //  - Hard-snapping the heading onto the stored `where` (a point only ~1 cell back) makes ants
-    //    orbit that point and stall — with re-evaluation on, throughput collapsed. Blending a
-    //    fraction of the way there each cycle glides the ant along the trail instead of orbiting.
     let bestScore = 0;
     let bestWhere: Vector2 | null = null;
     for (const [dx, dy] of GRID_COM_SCAN) {
@@ -775,27 +815,44 @@ export class Simulation {
       ant.informedUntil = this.frame + this.config.antInformedWindow;
     }
 
-    if (ant.pheromonesWrite) {
-      for (const interest of INTERESTS) {
-        const lastSeen = ant.lastTimeSeen[interest];
-        if (lastSeen < 0) continue;
-        const info = this.grid.get(gx, gy).pheromones[interest];
-
-        if (useDecay) {
+    if (useDecay) {
+      if (ant.pheromonesWrite) {
+        for (const interest of INTERESTS) {
+          const lastSeen = ant.lastTimeSeen[interest];
+          if (lastSeen < 0) continue;
+          const info = this.grid.get(gx, gy).pheromones[interest];
           const candidateScore = this.config.pheromoneDecayPerFrame ** (this.frame - lastSeen);
           const existingScore = readPheromoneStrength(info, this.frame, this.config.pheromoneDecayPerFrame);
           if (candidateScore <= existingScore) continue;
           info.strength = candidateScore;
-        } else {
-          if (lastSeen <= info.time) continue;
-          info.time = lastSeen;
-          info.strength = this.config.pheromoneDepositAmount; // for the debug overlay only
+          info.lastUpdated = this.frame;
+          info.where = { ...ant.oldestPositionRemembered };
         }
-        info.lastUpdated = this.frame;
-        info.where = { ...ant.oldestPositionRemembered };
+      } else if (this.frame >= ant.pheromonesBackTime) {
+        enablePheromonesWrite(ant);
       }
-    } else if (this.frame >= ant.pheromonesBackTime) {
-      enablePheromonesWrite(ant);
+    } else {
+      this.depositRawFrameTime(ant, gx, gy);
+    }
+  }
+
+  /** Raw frame-time deposit shared by 'legacy' and 'legacy+' (the two algorithms that score on
+   * time directly rather than a decayed/vector/scent field): overwrite a cell's lead for an
+   * interest only if this ant's own sighting of it is fresher than what's already stored there. */
+  private depositRawFrameTime(ant: Ant, gx: number, gy: number): void {
+    if (!ant.pheromonesWrite) {
+      if (this.frame >= ant.pheromonesBackTime) enablePheromonesWrite(ant);
+      return;
+    }
+    for (const interest of INTERESTS) {
+      const lastSeen = ant.lastTimeSeen[interest];
+      if (lastSeen < 0) continue;
+      const info = this.grid.get(gx, gy).pheromones[interest];
+      if (lastSeen <= info.time) continue;
+      info.time = lastSeen;
+      info.strength = this.config.pheromoneDepositAmount; // for the debug overlay only
+      info.lastUpdated = this.frame;
+      info.where = { ...ant.oldestPositionRemembered };
     }
   }
 

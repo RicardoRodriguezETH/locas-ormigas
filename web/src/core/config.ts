@@ -15,13 +15,32 @@ export const GRID_COM_SCAN: ReadonlyArray<readonly [number, number]> = [
   [1, 1],
 ];
 
-/** 'legacy' and 'gradient' both snap directly to whichever nearby cell has the best-scoring
- * lead for what an ant is seeking — 'legacy' scores by raw frame-time (never fades), 'gradient'
- * by that same time run through exponential decay (evaporates if not refreshed). 'flow' is
- * structurally different: instead of a remembered coordinate, each cell holds a decaying
- * *direction* vector built from the headings of ants who walked through it, and followers
- * align with the local vector sum rather than beelining for a point — the piece needed to
- * route around obstacles and support multiple simultaneous destinations.
+/** Five options, roughly in evolutionary order:
+ *
+ * 'legacy' is a *literal* port of the original Löve2D/Lua game's pheromone system, kept
+ * deliberately unfixed as a true baseline — see `Simulation.communicatePheromonesClassic` for
+ * the full rationale and the specific Lua lines it mirrors. In short, three things this rewrite
+ * later changed on purpose (all still present in 'legacy'):
+ *  - Steering hard-snaps straight onto the remembered lead point, no blending.
+ *  - Re-steering is gated by a persistent per-ant high-water-mark (`maxLeadScore`) that's only
+ *    ever raised, never reset — not "best lead available right now."
+ *  - No rest/idle activity cycle and no scout-vs-recruited erratic-wander variation: the
+ *    original's ants forage continuously forever at one constant wander amount (`pause()` is
+ *    dead code in the original — never actually called).
+ *
+ * 'legacy+' is what this rewrite calls "legacy" everywhere else: the *fixed* version of the
+ * same raw-frame-time scoring — re-evaluates the best local lead every cycle and blends the
+ * turn — plus the modern ant-behavior layer (rest/idle, scout/recruited wander, colony foraging
+ * throttle) that 'legacy' never had. Benchmarking 'legacy' against 'legacy+' is what actually
+ * measures how much all of that was worth.
+ *
+ * 'gradient' is 'legacy+' with the score run through exponential decay (evaporates if not
+ * refreshed) instead of raw frame-time (never fades).
+ *
+ * 'flow' is structurally different: instead of a remembered coordinate, each cell holds a
+ * decaying *direction* vector built from the headings of ants who walked through it, and
+ * followers align with the local vector sum rather than beelining for a point — the piece
+ * needed to route around obstacles and support multiple simultaneous destinations.
  *
  * 'diffusion' goes further: once a resource is discovered, its cell becomes a constant scent
  * *source*, and that scent spreads outward frame by frame into neighboring cells like heat or a
@@ -29,13 +48,14 @@ export const GRID_COM_SCAN: ReadonlyArray<readonly [number, number]> = [
  * exactly like they'd block a real scent. The resulting field's gradient organically curves
  * around obstacles without any ant needing to remember a path or a point; an ant just always
  * turns toward "stronger smell," the same instinct real chemotaxis relies on. This is also why
- * it should out-navigate the other three on an obstacle-heavy map: legacy/gradient can point an
- * ant straight at a memorized point on the far side of a wall (dead reckoning through solid
- * ground), and flow's local vector has no persistent large-scale structure to detour with — a
- * diffused field is shaped by the passable-cell graph itself. See
- * `Simulation.communicatePheromones`/`communicatePheromonesFlow`/`communicatePheromonesDiffusion`
- * and `WorldGrid.diffuseScent`, kept side by side so all four are directly comparable. */
-export type PheromoneAlgorithm = 'legacy' | 'gradient' | 'flow' | 'diffusion';
+ * it should out-navigate legacy+/gradient on an obstacle-heavy map: they can point an ant
+ * straight at a memorized point on the far side of a wall (dead reckoning through solid ground),
+ * and flow's local vector has no persistent large-scale structure to detour with — a diffused
+ * field is shaped by the passable-cell graph itself. See
+ * `Simulation.communicatePheromones`/`communicatePheromonesClassic`/`communicatePheromonesFlow`/
+ * `communicatePheromonesDiffusion` and `WorldGrid.diffuseScent`, kept side by side so all five
+ * are directly comparable (see also `core/benchmark.ts`). */
+export type PheromoneAlgorithm = 'legacy' | 'legacy+' | 'gradient' | 'flow' | 'diffusion';
 
 export interface SimConfig {
   numAnts: number;
@@ -230,10 +250,11 @@ export interface SimConfig {
   /** Strength at which the debug overlay renders a tile at full intensity. */
   pheromoneSaturation: number;
   /** How far (0-1) an ant rotates its heading toward the best local pheromone lead each
-   * communication, for all four algorithms. 1 = hard-snap (orbits a stored point and stalls
-   * for legacy/gradient; converges worse for flow/diffusion too); low values glide the ant
-   * along the trail instead. See `communicatePheromonesScored`/`communicatePheromonesFlow`/
-   * `communicatePheromonesDiffusion`. */
+   * communication — for 'legacy+'/'gradient'/'flow'/'diffusion'. 1 = hard-snap (orbits a stored
+   * point and stalls for legacy+/gradient; converges worse for flow/diffusion too); low values
+   * glide the ant along the trail instead. Not read by 'legacy' at all — it hard-snaps
+   * unconditionally, faithfully to the original. See
+   * `communicatePheromonesScored`/`communicatePheromonesFlow`/`communicatePheromonesDiffusion`. */
   pheromoneLeadBlend: number;
   /** 'diffusion' only: fraction of the gap to each passable neighbor's scent exchanged per
    * relaxation step (like thermal conductivity) — see `WorldGrid.diffuseScent`. */

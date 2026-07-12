@@ -18,7 +18,7 @@ export interface BenchmarkOptions {
   onProgress?: (algorithm: PheromoneAlgorithm, framesDone: number, framesTotal: number) => void;
 }
 
-const ALL_ALGORITHMS: PheromoneAlgorithm[] = ['legacy', 'gradient', 'flow', 'diffusion'];
+const ALL_ALGORITHMS: PheromoneAlgorithm[] = ['legacy', 'legacy+', 'gradient', 'flow', 'diffusion'];
 /** How often the frame loop yields back to the event loop — frequent enough that the tab stays
  * responsive and `onProgress` can drive a live progress readout, infrequent enough that yielding
  * itself isn't a meaningful fraction of the benchmark's own runtime. */
@@ -28,12 +28,17 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** Runs each of the four pheromone algorithms on an identical small headless colony for a fixed
+/** Runs each of the five pheromone algorithms on an identical small headless colony for a fixed
  * simulated window and reports total deliveries — the in-app version of the diagnostic harness
  * used to empirically tune 'diffusion' during development. Each algorithm gets its own
  * throwaway `Simulation` on the same base map; nothing here touches or is visible to whatever
  * simulation is currently on screen. Chunked with periodic yields so a several-second run
- * doesn't freeze the tab. */
+ * doesn't freeze the tab.
+ *
+ * Comparing 'legacy' against 'legacy+' in particular measures something different from the
+ * other pairs here: not "which pheromone algorithm is better" but "how much did fixing the
+ * pheromone mechanic and adding the modern ant-behavior layer (rest/idle, scout/recruited
+ * wander) improve on the literal original" — see `PheromoneAlgorithm`'s doc comment. */
 export async function runPheromoneBenchmark(options: BenchmarkOptions = {}): Promise<BenchmarkResult[]> {
   const frames = options.frames ?? 50000;
   const antCount = options.antCount ?? 300;
