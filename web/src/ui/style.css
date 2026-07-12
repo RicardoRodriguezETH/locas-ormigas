@@ -189,6 +189,19 @@ body {
   letter-spacing: 0.04em;
 }
 
+.stats-benchmark-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stats-benchmark-status {
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 420px;
+}
+
 /* Phone-width layouts (portrait iPhone mini and up): a 150px side panel eats too much of a
  * ~375px-wide screen, so below this width the panel becomes a compact bar docked under the
  * sim view instead of squeezed in beside it. `order` (not markup order) does the flip so the
