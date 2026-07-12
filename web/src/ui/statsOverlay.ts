@@ -1,5 +1,23 @@
 import { getLifeStage } from '../core/ant';
+import { type BenchmarkResult, runPheromoneBenchmark } from '../core/benchmark';
+import type { PheromoneAlgorithm } from '../core/config';
 import type { Simulation } from '../core/simulation';
+
+const ALGORITHM_LABELS: Record<PheromoneAlgorithm, string> = {
+  legacy: 'Legacy',
+  gradient: 'Gradient',
+  flow: 'Flow',
+  diffusion: 'Diffusion',
+};
+
+/** Reuses the history charts' existing palette (population/food/throttle) plus one neutral grey,
+ * rather than inventing a fifth color scheme just for this chart. */
+const ALGORITHM_COLORS: Record<PheromoneAlgorithm, string> = {
+  legacy: '#8b909a',
+  gradient: '#3799bb',
+  flow: '#4caf7d',
+  diffusion: '#e8a33d',
+};
 
 const HISTOGRAM_BINS = 12;
 
@@ -45,6 +63,13 @@ export class StatsOverlay {
   private readonly sizeCanvas: HTMLCanvasElement;
   private readonly sizeCtx: CanvasRenderingContext2D;
 
+  private readonly benchmarkButton: HTMLButtonElement;
+  private readonly benchmarkStatus: HTMLDivElement;
+  private readonly benchmarkCanvas: HTMLCanvasElement;
+  private readonly benchmarkCtx: CanvasRenderingContext2D;
+  private benchmarkResults: BenchmarkResult[] | null = null;
+  private benchmarkRunning = false;
+
   constructor(host: HTMLElement) {
     const root = document.createElement('div');
     root.className = 'stats-overlay';
@@ -82,6 +107,27 @@ export class StatsOverlay {
     this.ageCtx = ageChart.getContext('2d')!;
     this.sizeCanvas = sizeChart;
     this.sizeCtx = sizeChart.getContext('2d')!;
+
+    root.appendChild(this.heading('Pheromone algorithm benchmark'));
+    const benchmarkControls = document.createElement('div');
+    benchmarkControls.className = 'stats-benchmark-controls';
+    const benchmarkButton = document.createElement('button');
+    benchmarkButton.type = 'button';
+    benchmarkButton.className = 'tool-button';
+    benchmarkButton.textContent = 'Run benchmark';
+    benchmarkButton.addEventListener('click', () => this.runBenchmark());
+    const benchmarkStatus = document.createElement('div');
+    benchmarkStatus.className = 'stats-benchmark-status';
+    benchmarkStatus.textContent = 'Runs all four algorithms on an identical small colony and compares delivery throughput.';
+    benchmarkControls.append(benchmarkButton, benchmarkStatus);
+    root.appendChild(benchmarkControls);
+    const [benchmarkCanvas, benchmarkCtx] = this.makeCanvas(480, 160);
+    root.appendChild(benchmarkCanvas);
+    this.benchmarkButton = benchmarkButton;
+    this.benchmarkStatus = benchmarkStatus;
+    this.benchmarkCanvas = benchmarkCanvas;
+    this.benchmarkCtx = benchmarkCtx;
+    this.drawBenchmark();
 
     host.appendChild(root);
     this.root = root;
@@ -334,5 +380,70 @@ export class StatsOverlay {
     ctx.fillText(`max ${maxCount}`, padding, padding - 8);
     ctx.textAlign = 'right';
     ctx.fillText(formatUpper(upper), padding + chartW, padding + chartH + 14);
+  }
+
+  /** Runs `runPheromoneBenchmark` (four throwaway headless colonies, one per algorithm — fully
+   * separate from whatever's on screen) and redraws the comparison chart when it settles. Guards
+   * against overlapping runs from a double-click. */
+  private async runBenchmark(): Promise<void> {
+    if (this.benchmarkRunning) return;
+    this.benchmarkRunning = true;
+    this.benchmarkButton.disabled = true;
+    this.benchmarkResults = null;
+    this.drawBenchmark();
+
+    const results = await runPheromoneBenchmark({
+      onProgress: (algorithm, framesDone, framesTotal) => {
+        this.benchmarkStatus.textContent = `Running ${ALGORITHM_LABELS[algorithm]}… ${framesDone}/${framesTotal} frames`;
+      },
+    });
+
+    this.benchmarkResults = results;
+    this.benchmarkRunning = false;
+    this.benchmarkButton.disabled = false;
+    this.benchmarkStatus.textContent = 'Deliveries over a fixed simulated window, identical small colony, same map for all four.';
+    this.drawBenchmark();
+  }
+
+  /** Horizontal bar chart, same visual language as `drawActivity` — one bar per algorithm,
+   * colored consistently with the history charts above. Shows a placeholder until the first run
+   * completes. */
+  private drawBenchmark(): void {
+    const ctx = this.benchmarkCtx;
+    const canvas = this.benchmarkCanvas;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!this.benchmarkResults) {
+      ctx.fillStyle = '#8b909a';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Run the benchmark to compare algorithms', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
+    const maxDeliveries = Math.max(...this.benchmarkResults.map((r) => r.deliveries), 1);
+    const rowH = 28;
+    const gap = 8;
+    const leftPad = 90;
+    const rightPad = 60;
+    const barMaxW = canvas.width - leftPad - rightPad;
+    ctx.font = '12px sans-serif';
+    ctx.textBaseline = 'middle';
+
+    this.benchmarkResults.forEach(({ algorithm, deliveries }, i) => {
+      const y = i * (rowH + gap) + rowH / 2 + 4;
+      const barW = (deliveries / maxDeliveries) * barMaxW;
+
+      ctx.fillStyle = '#8b909a';
+      ctx.textAlign = 'right';
+      ctx.fillText(ALGORITHM_LABELS[algorithm], leftPad - 10, y);
+
+      ctx.fillStyle = ALGORITHM_COLORS[algorithm];
+      ctx.fillRect(leftPad, y - rowH / 2 + 3, Math.max(barW, 0), rowH - 6);
+
+      ctx.fillStyle = '#d8dade';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${deliveries}`, leftPad + barW + 8, y);
+    });
   }
 }

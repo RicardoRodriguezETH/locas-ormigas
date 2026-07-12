@@ -87,6 +87,10 @@ export class Simulation {
   deliveryEmaSlow = 0;
   foragingThrottle = 1;
   private deliveriesThisFrame = 0;
+  /** Lifetime food->cave delivery count — a plain running total, unlike the EMAs above which are
+   * deliberately smoothed/decayed for the throttle. Used by the pheromone-algorithm benchmark
+   * (see `core/benchmark.ts`) to score a run's throughput. */
+  totalDeliveries = 0;
 
   /** How strong the food-trail pheromone reads near the cave right now (0-1) — drives
    * recruitment of resting ants (see `SimConfig.antRecruitmentWakeGain`). Recomputed once per
@@ -698,6 +702,7 @@ export class Simulation {
 
     if (cell.type === 'cave' && ant.lookingFor === 'cave') {
       this.deliveriesThisFrame++; // about to complete a food->cave round trip
+      this.totalDeliveries++;
       ant.lastTimeSeen.cave = this.frame;
       (cell as CaveCell).discovered = true;
       this.beginUndergroundDelivery(ant); // physically carries the food down rather than it vanishing here
