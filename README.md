@@ -1,6 +1,10 @@
 # locas-ants
 Is a modern Lua remake of my old [Ant colony](https://www.youtube.com/watch?v=G5wb4f5n6qQ) simulation.
 
+**A TypeScript + PixiJS rewrite is in progress in [`web/`](web/)** — a browser-based
+version of this simulation, intended to eventually run cleanly cross-platform
+(including as an iOS app). See [`web/README.md`](web/README.md) for details and status.
+
 This is not a translation, is a remake from scratch using opensource engine Löve2D with friendly and popular Lua language.
 
 Last screenshots:
