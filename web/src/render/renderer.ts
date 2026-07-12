@@ -3,6 +3,7 @@ import { Camera } from '../core/camera';
 import { type Ant, dirToRad, walkFrame } from '../core/ant';
 import type { Cell } from '../core/cells';
 import { FoodCell, PortalCell } from '../core/cells';
+import { GRID_COM_SCAN } from '../core/config';
 import { readPheromoneFlow, readPheromoneStrength } from '../core/grid';
 import type { Simulation } from '../core/simulation';
 import type { Textures } from './textures';
@@ -192,12 +193,14 @@ export class SimulationRenderer {
 
   /** Draws a short arrow per cell/interest showing *which way* that cell's pheromone points,
    * not just how strong it is — a flat tile tint can't show that, and direction is the whole
-   * point of comparing algorithms (especially 'flow', which has no other visual signature).
-   * For 'legacy'/'gradient' the arrow points at the remembered `where`; for 'flow' it's the
-   * decayed flow vector itself. Intensity is squared before mapping to alpha/length so a
-   * merely-touched cell stays faint and only genuinely concentrated trails stand out — with
-   * 1500+ ants constantly refreshing nearby cells, a linear mapping made most of the map look
-   * uniformly "lit" instead of showing where the real trails are. */
+   * point of comparing algorithms (especially 'flow'/'diffusion', which have no other visual
+   * signature). For 'legacy'/'gradient' the arrow points at the remembered `where`; for 'flow'
+   * it's the decayed flow vector itself; for 'diffusion' it's the local scent gradient estimated
+   * from the 8 surrounding cells (same finite-difference computation ants themselves steer by).
+   * Intensity is squared before mapping to alpha/length so a merely-touched cell stays faint and
+   * only genuinely concentrated trails stand out — with 1500+ ants constantly refreshing nearby
+   * cells, a linear mapping made most of the map look uniformly "lit" instead of showing where
+   * the real trails are. */
   private syncPheromoneOverlay(): void {
     this.pheromoneLayer.clear();
     if (!this.showPheromones) return;
@@ -205,6 +208,7 @@ export class SimulationRenderer {
     const { grid, config, frame } = this.sim;
     const gridSize = config.mapGridSize;
     const isFlow = config.pheromoneAlgorithm === 'flow';
+    const isDiffusion = config.pheromoneAlgorithm === 'diffusion';
 
     for (let xg = grid.minXg; xg <= grid.maxXg; xg++) {
       for (let yg = grid.minYg; yg <= grid.maxYg; yg++) {
@@ -223,6 +227,23 @@ export class SimulationRenderer {
             if (magnitude < 1e-3) continue;
             dirX = flow.x / magnitude;
             dirY = flow.y / magnitude;
+          } else if (isDiffusion) {
+            if (info.scent < 1e-3) continue; // field hasn't reached this cell yet
+            let gx = 0;
+            let gy = 0;
+            for (const [dx, dy] of GRID_COM_SCAN) {
+              if (dx === 0 && dy === 0) continue;
+              const dist = Math.hypot(dx, dy);
+              const neighborScent = grid.get(xg + dx, yg + dy).pheromones[interest as 'food' | 'cave'].scent;
+              const rate = (neighborScent - info.scent) / dist;
+              gx += (dx / dist) * rate;
+              gy += (dy / dist) * rate;
+            }
+            const gradLen = Math.hypot(gx, gy);
+            if (gradLen < 1e-3) continue; // sitting on a local peak/plateau — no direction to show
+            dirX = gx / gradLen;
+            dirY = gy / gradLen;
+            magnitude = info.scent; // arrow prominence follows local concentration, not gradient steepness
           } else {
             magnitude = readPheromoneStrength(info, frame, config.pheromoneDecayPerFrame);
             if (magnitude <= 0) continue;
@@ -234,7 +255,8 @@ export class SimulationRenderer {
             dirY = dy / len;
           }
 
-          const raw = Math.min(1, magnitude / config.pheromoneSaturation);
+          const saturation = isDiffusion ? config.diffusionSourceStrength : config.pheromoneSaturation;
+          const raw = Math.min(1, magnitude / saturation);
           const intensity = raw * raw; // steeper falloff so weak/ambient signal stays faint
           if (intensity < 0.03) continue;
 

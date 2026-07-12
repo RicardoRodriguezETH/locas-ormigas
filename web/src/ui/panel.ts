@@ -22,6 +22,7 @@ const ALGORITHMS: Array<{ algorithm: PheromoneAlgorithm; label: string }> = [
   { algorithm: 'legacy', label: 'Legacy' },
   { algorithm: 'gradient', label: 'Gradient' },
   { algorithm: 'flow', label: 'Flow' },
+  { algorithm: 'diffusion', label: 'Diffusion' },
 ];
 
 export interface PanelCallbacks {

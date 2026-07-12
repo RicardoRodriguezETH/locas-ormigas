@@ -15,7 +15,7 @@ import {
 } from './ant';
 import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
-import { FoodCell, type FoodType } from './cells';
+import { CaveCell, FoodCell, type FoodType } from './cells';
 import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { UndergroundGrid } from './underground';
 import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, type Vector2 } from './vector';
@@ -274,6 +274,9 @@ export class Simulation {
     }
 
     this.updateForagingThrottle();
+    // relax the scent field after this frame's movement/discovery, before it's read for the cave
+    // signal below and, next frame, by every diffusion-following ant.
+    if (this.config.pheromoneAlgorithm === 'diffusion') this.grid.diffuseScent(this.config);
     this.caveFoodSignal = this.computeCaveFoodSignal();
     const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
     this.undergroundGrid.ensureDesignatedFrontier(this.config.antUndergroundDesignationPoolSize, targetVolume);
@@ -623,13 +626,22 @@ export class Simulation {
    * themselves scan), algorithm-aware like everything else pheromone-related. */
   private computeCaveFoodSignal(): number {
     const [cgx, cgy] = this.grid.worldToGrid(this.cavePosition.x, this.cavePosition.y);
-    const isFlow = this.config.pheromoneAlgorithm === 'flow';
+    const algorithm = this.config.pheromoneAlgorithm;
     const decay = this.config.pheromoneDecayPerFrame;
+
+    if (algorithm === 'diffusion') {
+      let maxScent = 0;
+      for (const [dx, dy] of GRID_COM_SCAN) {
+        const scent = this.grid.get(cgx + dx, cgy + dy).pheromones.food.scent;
+        if (scent > maxScent) maxScent = scent;
+      }
+      return Math.min(1, maxScent / this.config.diffusionSourceStrength);
+    }
 
     let maxStrength = 0;
     for (const [dx, dy] of GRID_COM_SCAN) {
       const info = this.grid.get(cgx + dx, cgy + dy).pheromones.food;
-      const strength = isFlow ? length(readPheromoneFlow(info, this.frame, decay)) : readPheromoneStrength(info, this.frame, decay);
+      const strength = algorithm === 'flow' ? length(readPheromoneFlow(info, this.frame, decay)) : readPheromoneStrength(info, this.frame, decay);
       if (strength > maxStrength) maxStrength = strength;
     }
     return Math.min(1, maxStrength / this.config.pheromoneSaturation);
@@ -665,9 +677,11 @@ export class Simulation {
 
     // 'flow' needs to deposit every frame — a trail only reads as a spatially continuous line
     // if ants lay it densely as they walk, unlike 'legacy'/'gradient''s sparse "check in every
-    // few frames" snapshot mechanic.
-    const shouldCommunicate =
-      this.config.pheromoneAlgorithm === 'flow' || this.config.antComEveryFrame || isComNeeded(ant, this.frame);
+    // few frames" snapshot mechanic. 'diffusion' doesn't deposit at all (the field self-propagates
+    // from pinned sources) but still wants every-frame *reads* for smooth continuous gradient
+    // following rather than a jerky re-steer every few frames.
+    const isEveryFrameAlgorithm = this.config.pheromoneAlgorithm === 'flow' || this.config.pheromoneAlgorithm === 'diffusion';
+    const shouldCommunicate = isEveryFrameAlgorithm || this.config.antComEveryFrame || isComNeeded(ant, this.frame);
     if (shouldCommunicate) {
       this.communicatePheromones(ant);
     }
@@ -685,12 +699,14 @@ export class Simulation {
     if (cell.type === 'cave' && ant.lookingFor === 'cave') {
       this.deliveriesThisFrame++; // about to complete a food->cave round trip
       ant.lastTimeSeen.cave = this.frame;
+      (cell as CaveCell).discovered = true;
       this.beginUndergroundDelivery(ant); // physically carries the food down rather than it vanishing here
       return;
     }
     cell.affectAnt(ant, { frame: this.frame, config: this.config });
     if (cell.type === 'food' || cell.type === 'cave') {
       ant.lastTimeSeen[cell.type] = this.frame;
+      (cell as FoodCell | CaveCell).discovered = true;
     }
     // a corpse (or any perishable food) that's been picked clean disappears
     if (cell.type === 'food' && (cell as FoodCell).perishable && (cell as FoodCell).nutrients <= 0) {
@@ -703,6 +719,8 @@ export class Simulation {
   private communicatePheromones(ant: Ant): void {
     if (this.config.pheromoneAlgorithm === 'flow') {
       this.communicatePheromonesFlow(ant);
+    } else if (this.config.pheromoneAlgorithm === 'diffusion') {
+      this.communicatePheromonesDiffusion(ant);
     } else {
       this.communicatePheromonesScored(ant);
     }
@@ -841,6 +859,44 @@ export class Simulation {
       }
     } else if (this.frame >= ant.pheromonesBackTime) {
       enablePheromonesWrite(ant);
+    }
+  }
+
+  /** 'diffusion': unlike the other three, ants never write anything here — the field is
+   * entirely self-maintaining (see `WorldGrid.diffuseScent`), shaped by the passable-cell graph
+   * and pinned at discovered sources. An ant just estimates the local gradient from the scent at
+   * its 8 surrounding cells (a finite-difference stand-in for sensing a concentration difference
+   * across its own body, the way a real ant's antennae work) and blend-steers up it — same
+   * `pheromoneLeadBlend`-capped mechanic as every other algorithm, for the same reason: an
+   * uncapped snap onto a locally noisy gradient orbits and stalls instead of arriving.
+   *
+   * Because the field already bends around walls (it only diffuses through passable cells), this
+   * gradient is obstacle-aware without any explicit path search — an ant on the far side of a
+   * wall pocket reads a gradient that already curves in through the gap, rather than pointing
+   * straight through the wall the way legacy/gradient's remembered-point dead reckoning does. */
+  private communicatePheromonesDiffusion(ant: Ant): void {
+    const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
+    const field = ant.lookingFor;
+    const ownScent = this.grid.get(gx, gy).pheromones[field].scent;
+
+    let gradient = { x: 0, y: 0 };
+    for (const [dx, dy] of GRID_COM_SCAN) {
+      if (dx === 0 && dy === 0) continue;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const neighborScent = this.grid.get(gx + dx, gy + dy).pheromones[field].scent;
+      const rate = (neighborScent - ownScent) / dist; // per-unit-distance rise toward this neighbor
+      gradient = add(gradient, scale({ x: dx / dist, y: dy / dist }, rate));
+    }
+
+    const strength = length(gradient);
+    if (strength > 0) {
+      const confidence = Math.min(1, ownScent / this.config.diffusionSourceStrength);
+      const b = Math.min(confidence, this.config.pheromoneLeadBlend);
+      const blended = add(scale(ant.direction, 1 - b), scale(normalize(gradient, ant.direction), b));
+      ant.direction = normalize(blended, ant.direction);
+      if (confidence > 0.3) {
+        ant.informedUntil = this.frame + this.config.antInformedWindow;
+      }
     }
   }
 }

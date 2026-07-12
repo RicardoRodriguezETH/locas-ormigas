@@ -1,5 +1,5 @@
 import type { Ant } from './ant';
-import type { Interest, SimConfig } from './config';
+import { GRID_COM_SCAN, INTERESTS, type Interest, type SimConfig } from './config';
 import { CaveCell, type Cell, FoodCell, type FoodType, GrassCell, PortalCell, PortalFactory } from './cells';
 import { type Vector2 } from './vector';
 
@@ -19,7 +19,14 @@ export interface PheromoneInfo {
    * seeking this interest. Its *direction* is the trail's direction, its *magnitude* is the
    * trail's strength — read it with `readPheromoneFlow`. */
   flow: Vector2;
+  /** 'diffusion' algorithm only: this cell's current scent concentration, maintained entirely by
+   * `WorldGrid.diffuseScent` (no per-ant decay math needed — read it directly). */
+  scent: number;
 }
+
+/** 8-directional neighbor offsets used by scent diffusion — `GRID_COM_SCAN` minus its own-cell
+ * entry. */
+const DIFFUSION_NEIGHBORS = GRID_COM_SCAN.filter(([dx, dy]) => dx !== 0 || dy !== 0);
 
 export interface GridCellData {
   /** Can an ant walk through this tile? */
@@ -63,6 +70,22 @@ export class WorldGrid {
 
   private cells = new Map<string, GridCellData>();
   private portalFactory = new PortalFactory();
+  /** Reused scratch buffer for `diffuseScent`'s neighbor-average pass, sized once on first use —
+   * avoids reallocating a grid-sized array every relaxation step (this runs several times a
+   * frame while the 'diffusion' algorithm is active). */
+  private diffusionScratch: Float64Array | null = null;
+  /** Flat-array mirror of `cells`, indexed the same way as `diffusionScratch` — built once and
+   * reused forever. Safe because every in-bounds cell is created eagerly in the constructor and
+   * never replaced afterward (`removeCell`/`setCellAtWorld` mutate a `GridCellData` in place),
+   * so a reference captured here stays valid. Exists purely to get `diffuseScentStep`'s hot inner
+   * loop off `get()`'s per-call string-key + `Map` lookup — profiling showed that lookup
+   * dominated 'diffusion''s frame cost (a full-grid scan, several times a frame) to the point of
+   * being the difference between comparable-to and ~20x slower than the other three algorithms. */
+  private diffusionCellArray: GridCellData[] | null = null;
+  /** Precomputed in-bounds neighbor indices (into `diffusionCellArray`) per cell, same reasoning
+   * as `diffusionCellArray` — geometry only (no passability baked in, so a wall painted at
+   * runtime is still picked up correctly by reading `.pass` fresh off the referenced cell). */
+  private diffusionNeighborIndices: Int32Array[] | null = null;
 
   constructor(config: SimConfig, options: { randomize?: boolean } = {}) {
     this.config = config;
@@ -89,8 +112,8 @@ export class WorldGrid {
       pass: true,
       cell: null,
       pheromones: {
-        food: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } },
-        cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } },
+        food: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 }, scent: 0 },
+        cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 }, scent: 0 },
       },
     };
     // light scattered grass for texture; no random blocks (those are placed deliberately as
@@ -184,6 +207,105 @@ export class WorldGrid {
       case 'ground':
         // removeCell above already cleared it back to plain ground
         break;
+    }
+  }
+
+  /** One relaxation step of scent diffusion, for the 'diffusion' pheromone algorithm: every
+   * passable cell's scent moves partway toward the average of its passable neighbors' scent
+   * (walls are excluded from that average — an *impassable* neighbor is treated the same as no
+   * neighbor there at all, so the field can't leak through solid ground and its gradient
+   * organically wraps around obstacles instead), decays a little, and any discovered resource
+   * cell is then pinned back up to full strength — a fixed-value heat source. Snapshots the old
+   * field into a scratch buffer first so the relaxation is simultaneous (order-independent), not
+   * a cascading sweep. Called `diffusionSubstepsPerFrame` times per frame, only while 'diffusion'
+   * is the active algorithm. */
+  diffuseScentStep(cfg: SimConfig): void {
+    const { cellArray, neighborIndices } = this.ensureDiffusionCache();
+    const size = cellArray.length;
+    if (!this.diffusionScratch || this.diffusionScratch.length !== size) {
+      this.diffusionScratch = new Float64Array(size);
+    }
+    const scratch = this.diffusionScratch;
+
+    for (const interest of INTERESTS) {
+      for (let i = 0; i < size; i++) {
+        scratch[i] = cellArray[i].pheromones[interest].scent;
+      }
+
+      for (let i = 0; i < size; i++) {
+        const data = cellArray[i];
+        if (!data.pass) {
+          data.pheromones[interest].scent = 0; // solid ground holds no scent
+          continue;
+        }
+
+        let sum = 0;
+        let count = 0;
+        const neighbors = neighborIndices[i];
+        for (let n = 0; n < neighbors.length; n++) {
+          const nIdx = neighbors[n];
+          if (!cellArray[nIdx].pass) continue; // walls block the exchange
+          sum += scratch[nIdx];
+          count++;
+        }
+        const own = scratch[i];
+        const avgNeighbor = count > 0 ? sum / count : own;
+        let next = (own + cfg.diffusionRate * (avgNeighbor - own)) * cfg.diffusionDecayPerStep;
+
+        // a discovered source only pins the scent for its *own* interest — a food cell has
+        // nothing to say about the 'cave' field, and vice versa
+        const isDiscoveredSource =
+          (interest === 'food' && data.cell instanceof FoodCell && data.cell.discovered) ||
+          (interest === 'cave' && data.cell instanceof CaveCell && data.cell.discovered);
+        if (isDiscoveredSource) {
+          next = cfg.diffusionSourceStrength; // pinned, not decayed/diffused away
+        }
+        data.pheromones[interest].scent = Math.max(0, next);
+      }
+    }
+  }
+
+  /** Lazily builds (and forever after just returns) `diffusionCellArray`/`diffusionNeighborIndices`
+   * — see their doc comments for why this caching is safe and why it exists. */
+  private ensureDiffusionCache(): { cellArray: GridCellData[]; neighborIndices: Int32Array[] } {
+    if (this.diffusionCellArray && this.diffusionNeighborIndices) {
+      return { cellArray: this.diffusionCellArray, neighborIndices: this.diffusionNeighborIndices };
+    }
+    const width = this.maxXg - this.minXg + 1;
+    const idx = (xg: number, yg: number) => (yg - this.minYg) * width + (xg - this.minXg);
+
+    const cellArray: GridCellData[] = [];
+    for (let xg = this.minXg; xg <= this.maxXg; xg++) {
+      for (let yg = this.minYg; yg <= this.maxYg; yg++) {
+        cellArray[idx(xg, yg)] = this.get(xg, yg);
+      }
+    }
+
+    const neighborIndices: Int32Array[] = [];
+    for (let xg = this.minXg; xg <= this.maxXg; xg++) {
+      for (let yg = this.minYg; yg <= this.maxYg; yg++) {
+        const list: number[] = [];
+        for (const [dx, dy] of DIFFUSION_NEIGHBORS) {
+          const nx = xg + dx;
+          const ny = yg + dy;
+          if (nx < this.minXg || nx > this.maxXg || ny < this.minYg || ny > this.maxYg) continue;
+          list.push(idx(nx, ny));
+        }
+        neighborIndices[idx(xg, yg)] = Int32Array.from(list);
+      }
+    }
+
+    this.diffusionCellArray = cellArray;
+    this.diffusionNeighborIndices = neighborIndices;
+    return { cellArray, neighborIndices };
+  }
+
+  /** Runs `diffuseScentStep` `diffusionSubstepsPerFrame` times — more substeps make the field
+   * physically propagate across the map faster in simulated time, independent of how often ants
+   * themselves re-sample it. */
+  diffuseScent(cfg: SimConfig): void {
+    for (let i = 0; i < cfg.diffusionSubstepsPerFrame; i++) {
+      this.diffuseScentStep(cfg);
     }
   }
 

@@ -53,6 +53,11 @@ export class FoodCell implements Cell {
   /** A dead ant left where it fell, foraged like any other food but finite and rendered as a
    * corpse rather than a food blob. */
   readonly isCorpse: boolean;
+  /** True once any ant has actually reached this source — gates it as a scent origin for the
+   * 'diffusion' pheromone algorithm (see `Simulation.interactionWithCells`/`WorldGrid.diffuseScent`).
+   * Undiscovered food doesn't "smell" yet, matching how the other algorithms also require a real
+   * sighting before any info propagates — the field isn't omniscient. */
+  discovered = false;
 
   constructor(foodType: FoodType = 'honeydew', opts: { nutrients?: number; perishable?: boolean; isCorpse?: boolean } = {}) {
     this.foodType = foodType;
@@ -74,6 +79,8 @@ export class FoodCell implements Cell {
 
 export class CaveCell implements Cell {
   readonly type = 'cave';
+  /** See `FoodCell.discovered` — set once any ant has actually reached the cave. */
+  discovered = false;
 
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'cave') return;

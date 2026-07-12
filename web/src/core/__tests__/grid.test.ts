@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAnt } from '../ant';
+import { CaveCell, FoodCell } from '../cells';
 import { defaultConfig } from '../config';
 import { WorldGrid } from '../grid';
 
@@ -88,5 +89,72 @@ describe('WorldGrid', () => {
     ant.speed = 1;
     grid.resolveBlockingCollisionAndMove(ant, 0);
     expect(grid.canPass(ant.position)).toBe(true);
+  });
+
+  describe('diffuseScent', () => {
+    it('does not pin any scent until a food source is actually discovered', () => {
+      const grid = new WorldGrid(cfg, { randomize: false });
+      grid.setCellAtWorld('food', { x: 0, y: 0 }); // discovered defaults to false
+      for (let i = 0; i < 20; i++) grid.diffuseScent(cfg);
+
+      const [xg, yg] = grid.worldToGrid(0, 0);
+      expect(grid.get(xg, yg).pheromones.food.scent).toBe(0);
+    });
+
+    it('pins a discovered food source and lets scent fall off with distance through open ground', () => {
+      const grid = new WorldGrid(cfg, { randomize: false });
+      grid.setCellAtWorld('food', { x: 0, y: 0 });
+      const [sx, sy] = grid.worldToGrid(0, 0);
+      (grid.get(sx, sy).cell as FoodCell).discovered = true;
+      for (let i = 0; i < 100; i++) grid.diffuseScent(cfg);
+
+      const near = grid.get(sx + 1, sy).pheromones.food.scent;
+      const far = grid.get(sx + 3, sy).pheromones.food.scent;
+      expect(grid.get(sx, sy).pheromones.food.scent).toBeCloseTo(cfg.diffusionSourceStrength);
+      expect(near).toBeGreaterThan(0);
+      expect(far).toBeGreaterThan(0);
+      expect(near).toBeGreaterThan(far); // monotonically weaker further from the source
+    });
+
+    it('bends around a wall instead of leaking straight through it', () => {
+      const grid = new WorldGrid(cfg, { randomize: false });
+      grid.setCellAtWorld('food', { x: 0, y: 0 });
+      const [sx, sy] = grid.worldToGrid(0, 0);
+      (grid.get(sx, sy).cell as FoodCell).discovered = true;
+
+      // wall a straight column directly east of the source, except a passable gap two rows down,
+      // so any scent on the far side must have routed around through the gap
+      for (let dy = -2; dy <= 2; dy++) {
+        if (dy === 2) continue; // the gap
+        grid.setCellAtWorld('block', { x: 16, y: dy * 16 });
+      }
+      for (let i = 0; i < 150; i++) grid.diffuseScent(cfg);
+
+      const behindWallDirect = grid.get(sx + 1, sy).pheromones.food.scent; // due east, blocked
+      const throughGap = grid.get(sx + 1, sy + 3).pheromones.food.scent; // east, past the gap
+      expect(behindWallDirect).toBe(0); // solid ground holds no scent
+      expect(throughGap).toBeGreaterThan(0); // reached by the passable route around the gap
+    });
+
+    it('keeps food and cave scent independent — a discovered food source does not pin the cave field', () => {
+      const grid = new WorldGrid(cfg, { randomize: false });
+      grid.setCellAtWorld('food', { x: 0, y: 0 });
+      const [sx, sy] = grid.worldToGrid(0, 0);
+      (grid.get(sx, sy).cell as FoodCell).discovered = true;
+      for (let i = 0; i < 20; i++) grid.diffuseScent(cfg);
+
+      expect(grid.get(sx, sy).pheromones.cave.scent).toBe(0);
+    });
+
+    it('a discovered cave pins the cave field, not the food field', () => {
+      const grid = new WorldGrid(cfg, { randomize: false });
+      grid.setCellAtWorld('cave', { x: 0, y: 0 });
+      const [sx, sy] = grid.worldToGrid(0, 0);
+      (grid.get(sx, sy).cell as CaveCell).discovered = true;
+      for (let i = 0; i < 20; i++) grid.diffuseScent(cfg);
+
+      expect(grid.get(sx, sy).pheromones.cave.scent).toBeCloseTo(cfg.diffusionSourceStrength);
+      expect(grid.get(sx, sy).pheromones.food.scent).toBe(0);
+    });
   });
 });

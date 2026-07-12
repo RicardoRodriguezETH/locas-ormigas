@@ -21,10 +21,21 @@ export const GRID_COM_SCAN: ReadonlyArray<readonly [number, number]> = [
  * structurally different: instead of a remembered coordinate, each cell holds a decaying
  * *direction* vector built from the headings of ants who walked through it, and followers
  * align with the local vector sum rather than beelining for a point — the piece needed to
- * route around obstacles and support multiple simultaneous destinations. See
- * `Simulation.communicatePheromones`/`communicatePheromonesFlow`, kept side by side so all
- * three are directly comparable. */
-export type PheromoneAlgorithm = 'legacy' | 'gradient' | 'flow';
+ * route around obstacles and support multiple simultaneous destinations.
+ *
+ * 'diffusion' goes further: once a resource is discovered, its cell becomes a constant scent
+ * *source*, and that scent spreads outward frame by frame into neighboring cells like heat or a
+ * real chemical smell — critically, only through *passable* cells, so walls block the exchange
+ * exactly like they'd block a real scent. The resulting field's gradient organically curves
+ * around obstacles without any ant needing to remember a path or a point; an ant just always
+ * turns toward "stronger smell," the same instinct real chemotaxis relies on. This is also why
+ * it should out-navigate the other three on an obstacle-heavy map: legacy/gradient can point an
+ * ant straight at a memorized point on the far side of a wall (dead reckoning through solid
+ * ground), and flow's local vector has no persistent large-scale structure to detour with — a
+ * diffused field is shaped by the passable-cell graph itself. See
+ * `Simulation.communicatePheromones`/`communicatePheromonesFlow`/`communicatePheromonesDiffusion`
+ * and `WorldGrid.diffuseScent`, kept side by side so all four are directly comparable. */
+export type PheromoneAlgorithm = 'legacy' | 'gradient' | 'flow' | 'diffusion';
 
 export interface SimConfig {
   numAnts: number;
@@ -219,10 +230,36 @@ export interface SimConfig {
   /** Strength at which the debug overlay renders a tile at full intensity. */
   pheromoneSaturation: number;
   /** How far (0-1) an ant rotates its heading toward the best local pheromone lead each
-   * communication, for all three algorithms. 1 = hard-snap (orbits a stored point and stalls
-   * for legacy/gradient; converges worse for flow too); low values glide the ant along the
-   * trail instead. See `communicatePheromonesScored`/`communicatePheromonesFlow`. */
+   * communication, for all four algorithms. 1 = hard-snap (orbits a stored point and stalls
+   * for legacy/gradient; converges worse for flow/diffusion too); low values glide the ant
+   * along the trail instead. See `communicatePheromonesScored`/`communicatePheromonesFlow`/
+   * `communicatePheromonesDiffusion`. */
   pheromoneLeadBlend: number;
+  /** 'diffusion' only: fraction of the gap to each passable neighbor's scent exchanged per
+   * relaxation step (like thermal conductivity) — see `WorldGrid.diffuseScent`. */
+  diffusionRate: number;
+  /** 'diffusion' only: per-*step* multiplier applied to every cell's scent after the exchange,
+   * so the field settles to a real distance-shaped gradient rather than eventually saturating
+   * flat everywhere. Deliberately its own knob, not reusing `pheromoneDecayPerFrame` — this decay
+   * is a property of the medium (how far scent carries), not of a specific social memory.
+   * Measured to matter a lot and in a narrow band: too low (faster decay, e.g. 0.99) starves
+   * most of the map of any signal at all — with a source pinned at 1 and a `diffusionRate` of
+   * 0.25, the field's characteristic falloff length is short enough that almost nothing beyond
+   * the immediate area around a source reads above noise, so ants far away get no more guidance
+   * than undirected wander. Too high (slower decay, e.g. 0.9999) goes the other way — nothing
+   * ever meaningfully cools off, so the field trends toward flooding flat at the source strength
+   * almost everywhere reachable, which erases the *gradient* (the only thing ants actually
+   * steer by) even though the field itself is "strong". 0.9997 was the best measured point
+   * between those failure modes on the stress-test map. */
+  diffusionDecayPerStep: number;
+  /** 'diffusion' only: the constant value a discovered resource cell is pinned to every step
+   * (a fixed-temperature source, in heat-equation terms), and the debug overlay's normalization
+   * reference. */
+  diffusionSourceStrength: number;
+  /** 'diffusion' only: relaxation steps run per simulation frame. More steps make the field
+   * physically propagate across the map faster (in simulated time) without changing how often
+   * ants themselves re-sample it. */
+  diffusionSubstepsPerFrame: number;
   pheromoneAlgorithm: PheromoneAlgorithm;
 }
 
@@ -305,5 +342,9 @@ export const defaultConfig: SimConfig = {
   pheromoneDepositAmount: 1,
   pheromoneSaturation: 1,
   pheromoneLeadBlend: 0.5,
+  diffusionRate: 0.25,
+  diffusionDecayPerStep: 0.9997,
+  diffusionSourceStrength: 1,
+  diffusionSubstepsPerFrame: 3,
   pheromoneAlgorithm: 'gradient',
 };

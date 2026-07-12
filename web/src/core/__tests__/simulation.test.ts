@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AntLayer, createAnt } from '../ant';
 import { createEgg } from '../brood';
+import { CaveCell, FoodCell } from '../cells';
 import { defaultConfig } from '../config';
 import { readPheromoneStrength } from '../grid';
 import { Simulation } from '../simulation';
@@ -181,6 +182,63 @@ describe('Simulation', () => {
     expect(deliveries).toBeGreaterThan(30);
   }, 30000);
 
+  it('diffusion algorithm steers up the local scent gradient toward the interest an ant is seeking', () => {
+    const localCfg = { ...cfg, pheromoneAlgorithm: 'diffusion' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    // seed a rising-to-the-east scent field directly, isolating steering from `diffuseScent`
+    // itself (which is covered separately in grid.test.ts)
+    sim.grid.get(1, 0).pheromones.food.scent = 1;
+    sim.grid.get(0, 0).pheromones.food.scent = 0.5;
+    sim.grid.get(-1, 0).pheromones.food.scent = 0.2;
+
+    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: 1 }); // heading south
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+    seeker.restAt = Infinity;
+    sim.ants = [seeker];
+    sim.update();
+
+    expect(seeker.direction.x).toBeGreaterThan(0); // pulled east, toward the rising scent
+  });
+
+  it('diffusion algorithm: reaching a resource marks it discovered, gating it as a scent source', () => {
+    const sim = new Simulation({ ...cfg, pheromoneAlgorithm: 'diffusion' as const }, { randomizeGrid: false });
+    sim.grid.seedCell('food', 0, 0);
+    sim.grid.seedCell('cave', 4, 0);
+
+    const foodCell = sim.grid.get(0, 0).cell as FoodCell;
+    const caveCell = sim.grid.get(4, 0).cell as CaveCell;
+    expect(foodCell.discovered).toBe(false);
+    expect(caveCell.discovered).toBe(false);
+
+    const scout = createAnt(cfg, { x: 8, y: 8 }, { x: -1, y: 0 });
+    scout.speed = 0;
+    scout.lookingFor = 'food';
+    sim.ants = [scout];
+    sim.update(); // steps onto (0,0), picks up food, flips discovered
+
+    expect(foodCell.discovered).toBe(true);
+    expect(caveCell.discovered).toBe(false); // not yet visited
+  });
+
+  it('diffusion algorithm colony delivers food, not fewer than an undirected colony would', () => {
+    // same floor-check rationale as the 'flow' throughput test above: cheap regression guard,
+    // not a benchmark. Measured empirically (see config.ts's diffusionDecayPerStep doc comment)
+    // to comfortably outperform 'legacy' on the stress-test map at these tuned defaults.
+    vi.restoreAllMocks();
+    const localCfg = { ...defaultConfig, pheromoneAlgorithm: 'diffusion' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+    sim.init(300);
+    const probe = sim as unknown as { deliveriesThisFrame: number };
+    let deliveries = 0;
+    for (let f = 0; f < 10000; f++) {
+      sim.update();
+      deliveries += probe.deliveriesThisFrame ?? 0;
+    }
+    expect(deliveries).toBeGreaterThan(30);
+  }, 30000);
+
   it('gradient algorithm favors a freshly-refreshed lead over a stale one, even if both were once equally strong', () => {
     const localCfg = { ...cfg, antComEveryFrame: true };
     const sim = new Simulation(localCfg, { randomizeGrid: false });
@@ -208,7 +266,7 @@ describe('Simulation', () => {
   });
 
   it('pheromone concentration decays over time when not refreshed', () => {
-    const info = { strength: 1, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 } };
+    const info = { strength: 1, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 }, scent: 0 };
     const initial = readPheromoneStrength(info, 0, cfg.pheromoneDecayPerFrame);
     const decayedLater = readPheromoneStrength(info, 1000, cfg.pheromoneDecayPerFrame);
 
