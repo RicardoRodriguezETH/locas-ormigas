@@ -14,6 +14,10 @@ export interface Textures {
   egg: Texture;
   larva: Texture;
   pupa: Texture;
+  /** Undug underground soil. */
+  dirt: Texture;
+  /** A dead ant left where it fell (a finite corpse food source). */
+  corpse: Texture;
 }
 
 export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
@@ -21,13 +25,13 @@ export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
 
   const [
     ground, block, antWalk0, antWalk1, antWalk3, food, cave, grass, pb0, pb1, pb2, po0, po1, po2,
-    queen, egg, larva, pupa,
+    queen, egg, larva, pupa, dirt, corpse,
   ] = await Promise.all([
       Assets.load<Texture>(path('ground01.png')),
       Assets.load<Texture>(path('block01.png')),
-      Assets.load<Texture>(path('antWalk_01.png')),
-      Assets.load<Texture>(path('antWalk_02.png')),
-      Assets.load<Texture>(path('antWalk_03.png')),
+      Assets.load<Texture>(path('antWalkN_01.png')),
+      Assets.load<Texture>(path('antWalkN_02.png')),
+      Assets.load<Texture>(path('antWalkN_03.png')),
       Assets.load<Texture>(path('food04.png')),
       Assets.load<Texture>(path('cave.png')),
       Assets.load<Texture>(path('grass01.png')),
@@ -41,6 +45,8 @@ export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
       Assets.load<Texture>(path('egg.png')),
       Assets.load<Texture>(path('larva.png')),
       Assets.load<Texture>(path('pupa.png')),
+      Assets.load<Texture>(path('dirt01.png')),
+      Assets.load<Texture>(path('corpse.png')),
     ]);
 
   return {
@@ -57,5 +63,7 @@ export async function loadTextures(baseUrl = 'images'): Promise<Textures> {
     egg,
     larva,
     pupa,
+    dirt,
+    corpse,
   };
 }

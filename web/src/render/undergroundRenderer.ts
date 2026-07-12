@@ -144,10 +144,10 @@ export class UndergroundRenderer {
     for (let xg = undergroundGrid.minXg; xg <= undergroundGrid.maxXg; xg++) {
       for (let yg = undergroundGrid.minYg; yg <= undergroundGrid.maxYg; yg++) {
         const sprite = this.groundSprites.get(tileKey(xg, yg))!;
-        // dirt reuses the 'block' texture (solid/impassable look), dug tunnels reuse 'ground'
-        sprite.texture = undergroundGrid.get(xg, yg).dug ? this.textures.ground : this.textures.block;
-        // tint dirt brown-ish so it reads as earth rather than the surface's stone-block color
-        sprite.tint = undergroundGrid.get(xg, yg).dug ? 0xffffff : 0x8a5a34;
+        // undug cells show the granular soil texture; dug tunnels show the open 'ground' floor
+        const dug = undergroundGrid.get(xg, yg).dug;
+        sprite.texture = dug ? this.textures.ground : this.textures.dirt;
+        sprite.tint = 0xffffff;
       }
     }
   }

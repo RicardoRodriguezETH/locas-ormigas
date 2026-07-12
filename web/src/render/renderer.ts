@@ -2,7 +2,7 @@ import { Container, Graphics, type Application, Sprite, type Texture } from 'pix
 import { Camera } from '../core/camera';
 import { type Ant, dirToRad, walkFrame } from '../core/ant';
 import type { Cell } from '../core/cells';
-import { PortalCell } from '../core/cells';
+import { FoodCell, PortalCell } from '../core/cells';
 import { readPheromoneFlow, readPheromoneStrength } from '../core/grid';
 import type { Simulation } from '../core/simulation';
 import type { Textures } from './textures';
@@ -120,7 +120,7 @@ export class SimulationRenderer {
       case 'grass':
         return this.textures.grass;
       case 'food':
-        return this.textures.food;
+        return (cell as FoodCell).isCorpse ? this.textures.corpse : this.textures.food;
       case 'cave':
         return this.textures.cave;
       case 'portal': {
