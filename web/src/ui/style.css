@@ -202,6 +202,123 @@ body {
   max-width: 420px;
 }
 
+/* Topmost element in the panel, deliberately styled unlike every other label here (a solid
+ * color badge, not just tinted text) — this is the one piece of state a player must never lose
+ * track of, so it needs to read at a glance, not just on close inspection. */
+.panel-mode-badge {
+  text-align: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.panel-mode-badge.gameplay {
+  background: var(--accent-active);
+  color: #1a1a1a;
+}
+
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.6);
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-backdrop.visible {
+  display: flex;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 440px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.modal-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.modal-close:hover {
+  background: #2a2e35;
+  color: var(--text);
+}
+
+.modal-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.modal-slot-button {
+  appearance: none;
+  text-align: left;
+  border: 1px solid var(--panel-border);
+  background: #2a2e35;
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.modal-slot-button:hover:not(:disabled) {
+  background: #33383f;
+  border-color: var(--accent);
+}
+
+.modal-slot-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.modal-slot-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.modal-slot-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 /* Phone-width layouts (portrait iPhone mini and up): a 150px side panel eats too much of a
  * ~375px-wide screen, so below this width the panel becomes a compact bar docked under the
  * sim view instead of squeezed in beside it. `order` (not markup order) does the flip so the

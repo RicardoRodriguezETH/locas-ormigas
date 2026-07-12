@@ -16,7 +16,7 @@ import {
 import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { CaveCell, FoodCell, type FoodType } from './cells';
-import { type PaintableCellType, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
+import { type PaintableCellType, type SerializedGridCell, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { UndergroundGrid } from './underground';
 import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, type Vector2 } from './vector';
 
@@ -51,12 +51,59 @@ const HISTORY_SAMPLE_INTERVAL_FRAMES = 30;
 /** Caps memory/redraw cost — old samples fall off the front as new ones are appended. */
 const HISTORY_MAX_SAMPLES = 400;
 
+/** `Ant`, but `carriedBrood`/`fetchingBrood` are indices into `SaveData.brood` instead of direct
+ * object references — both are shared references into `Simulation.brood` in the live game (the
+ * same item is reachable from `brood[]` *and* from whichever ant is carrying/fetching it), which
+ * plain JSON has no way to express; an index lets `Simulation.loadSaveData` reconnect the same
+ * shared reference on the other side instead of silently forking two independent copies. */
+export interface SerializedAnt extends Omit<Ant, 'carriedBrood' | 'fetchingBrood'> {
+  carriedBroodIndex: number | null;
+  fetchingBroodIndex: number | null;
+}
+
+/** Everything needed to exactly resume a running `Simulation` later — see
+ * `Simulation.toSaveData`/`fromSaveData`. Deliberately excludes pheromone trail data and
+ * `history` (both transient/derived — see `WorldGrid.exportModifiedCells`'s doc comment) and the
+ * per-frame `deliveriesThisFrame` accumulator (reset every frame anyway). */
+export interface SaveData {
+  version: 1;
+  config: SimConfig;
+  gameMode: GameMode;
+  frame: number;
+  cavePosition: Vector2;
+  queenChamberPosition: Vector2;
+  nurseryChamberPosition: Vector2;
+  larderPosition: Vector2;
+  queen: Queen;
+  brood: Brood[];
+  foodStored: number;
+  initialPopulation: number;
+  undergroundAntCount: number;
+  deliveryEmaFast: number;
+  deliveryEmaSlow: number;
+  foragingThrottle: number;
+  totalDeliveries: number;
+  caveFoodSignal: number;
+  ants: SerializedAnt[];
+  gridCells: SerializedGridCell[];
+  foodIsFinite: boolean;
+  dugCells: Array<[number, number]>;
+}
+
 /** Owns the ant colony and drives the pheromone-following behavior each frame: move, react to
  * the tile underfoot, then read/write trail info in the surrounding grid cells. */
+export type GameMode = 'testing' | 'gameplay';
+
 export class Simulation {
   readonly config: SimConfig;
   readonly grid: WorldGrid;
   readonly undergroundGrid: UndergroundGrid;
+  /** 'testing': an established colony (see `init`) with effectively-bottomless food, for
+   * comparing pheromone algorithms on equal footing. 'gameplay' (see `initGameplay`): a true
+   * founding colony — the queen and one ant — with finite food, for actually playing. Purely
+   * informational to most of the simulation (both modes run the exact same update loop); only
+   * `WorldGrid.foodIsFinite` and the two init paths themselves read it. */
+  gameMode: GameMode = 'testing';
   ants: Ant[] = [];
   frame = 0;
   cavePosition: Vector2 = { x: 0, y: 0 };
@@ -107,19 +154,12 @@ export class Simulation {
     this.undergroundGrid = new UndergroundGrid(config);
   }
 
+  /** 'testing' mode: an established colony (see `gameMode`'s doc comment), same as this class
+   * has always seeded — kept exactly as-is so existing benchmarks/tests are unaffected. */
   init(numAnts: number = this.config.numAnts): void {
-    const caveGx = -6;
-    const caveGy = -4;
-    this.grid.seedCell('cave', caveGx, caveGy);
-    this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
-    this.buildBaseMap(caveGx, caveGy);
-    // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
-    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg } =
-      this.undergroundGrid.seedStarterNest(caveGx, caveGy);
-    const half = this.config.mapGridSize / 2;
-    this.queenChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(queenChamberXg, queenChamberYg), { x: half, y: half });
-    this.nurseryChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(nurseryChamberXg, nurseryChamberYg), { x: half, y: half });
-    this.larderPosition = add(this.undergroundGrid.gridToWorldOrigin(larderChamberXg, larderChamberYg), { x: half, y: half });
+    this.gameMode = 'testing';
+    this.grid.foodIsFinite = false;
+    this.setupMapAndNest();
     this.queen = createQueen(this.queenChamberPosition);
     this.brood = [];
     this.foodStored = 0;
@@ -156,6 +196,46 @@ export class Simulation {
     }
     this.initialPopulation = this.ants.length;
     this.seedEstablishedBrood();
+  }
+
+  /** 'gameplay' mode: a true founding colony on the same prebuilt map/nest as `init`, instead of
+   * an established-colony snapshot — just the queen and one worker, no seeded brood, and finite
+   * food (`WorldGrid.foodIsFinite`). Everything from here on grows purely through the queen's
+   * own egg-laying. The reproduction cap still targets a *full-size* colony (`config.numAnts`),
+   * not literally "1.3x the one starting ant" — `initialPopulation` is the cap's basis (see
+   * `updateQueenAndBrood`), not a record of how many ants actually spawned, so it's set to the
+   * design target directly rather than to `this.ants.length`. */
+  initGameplay(): void {
+    this.gameMode = 'gameplay';
+    this.grid.foodIsFinite = true;
+    this.setupMapAndNest();
+    this.queen = createQueen(this.queenChamberPosition);
+    this.brood = [];
+    this.foodStored = 0;
+    this.history = [];
+
+    const direction = fromAngle(Math.random() * Math.PI * 2);
+    this.ants = [createAnt(this.config, { ...this.cavePosition }, direction, 0, 'surface')];
+    this.undergroundAntCount = 0;
+    this.initialPopulation = this.config.numAnts;
+  }
+
+  /** Cave placement, the two hidden food pockets + grass, and the pre-built starter nest
+   * (queen/nursery/larder chambers) — shared by both `init` and `initGameplay`; they only differ
+   * in how the *colony itself* (ants/brood/food) is seeded on top of this same map. */
+  private setupMapAndNest(): void {
+    const caveGx = -6;
+    const caveGy = -4;
+    this.grid.seedCell('cave', caveGx, caveGy);
+    this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
+    this.buildBaseMap(caveGx, caveGy);
+    // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
+    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg } =
+      this.undergroundGrid.seedStarterNest(caveGx, caveGy);
+    const half = this.config.mapGridSize / 2;
+    this.queenChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(queenChamberXg, queenChamberYg), { x: half, y: half });
+    this.nurseryChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(nurseryChamberXg, nurseryChamberYg), { x: half, y: half });
+    this.larderPosition = add(this.undergroundGrid.gridToWorldOrigin(larderChamberXg, larderChamberYg), { x: half, y: half });
   }
 
   /** Seeds the nursery with brood already spread across all developmental stages, plus a little
@@ -960,5 +1040,87 @@ export class Simulation {
         ant.informedUntil = this.frame + this.config.antInformedWindow;
       }
     }
+  }
+
+  /** Snapshots everything needed to exactly resume this colony later — see `SaveData`'s doc
+   * comment for what's deliberately left out. Pure/read-only: doesn't touch `this` at all. */
+  toSaveData(): SaveData {
+    const broodIndex = new Map<Brood, number>(this.brood.map((b, i) => [b, i]));
+    const ants: SerializedAnt[] = this.ants.map((ant) => {
+      const { carriedBrood, fetchingBrood, ...rest } = ant;
+      return {
+        ...rest,
+        carriedBroodIndex: carriedBrood ? (broodIndex.get(carriedBrood) ?? null) : null,
+        fetchingBroodIndex: fetchingBrood ? (broodIndex.get(fetchingBrood) ?? null) : null,
+      };
+    });
+
+    return {
+      version: 1,
+      config: this.config,
+      gameMode: this.gameMode,
+      frame: this.frame,
+      cavePosition: this.cavePosition,
+      queenChamberPosition: this.queenChamberPosition,
+      nurseryChamberPosition: this.nurseryChamberPosition,
+      larderPosition: this.larderPosition,
+      queen: this.queen,
+      brood: this.brood,
+      foodStored: this.foodStored,
+      initialPopulation: this.initialPopulation,
+      undergroundAntCount: this.undergroundAntCount,
+      deliveryEmaFast: this.deliveryEmaFast,
+      deliveryEmaSlow: this.deliveryEmaSlow,
+      foragingThrottle: this.foragingThrottle,
+      totalDeliveries: this.totalDeliveries,
+      caveFoodSignal: this.caveFoodSignal,
+      ants,
+      gridCells: this.grid.exportModifiedCells(),
+      foodIsFinite: this.grid.foodIsFinite,
+      dugCells: this.undergroundGrid.exportDugCells(),
+    };
+  }
+
+  /** Reconstructs a fully-running `Simulation` from `toSaveData`'s output. A static factory
+   * rather than an instance method: `config` is `readonly`, set once at construction, so there's
+   * no "load into an existing instance" — a save's config has to be threaded through `new
+   * Simulation(...)` itself before the rest of the state can be restored on top. */
+  static fromSaveData(data: SaveData): Simulation {
+    const sim = new Simulation(data.config, { randomizeGrid: false });
+    sim.loadSaveData(data);
+    return sim;
+  }
+
+  private loadSaveData(data: SaveData): void {
+    this.gameMode = data.gameMode;
+    this.frame = data.frame;
+    this.cavePosition = data.cavePosition;
+    this.queenChamberPosition = data.queenChamberPosition;
+    this.nurseryChamberPosition = data.nurseryChamberPosition;
+    this.larderPosition = data.larderPosition;
+    this.queen = data.queen;
+    this.brood = data.brood;
+    this.foodStored = data.foodStored;
+    this.initialPopulation = data.initialPopulation;
+    this.undergroundAntCount = data.undergroundAntCount;
+    this.deliveryEmaFast = data.deliveryEmaFast;
+    this.deliveryEmaSlow = data.deliveryEmaSlow;
+    this.foragingThrottle = data.foragingThrottle;
+    this.totalDeliveries = data.totalDeliveries;
+    this.caveFoodSignal = data.caveFoodSignal;
+    this.history = [];
+
+    this.grid.foodIsFinite = data.foodIsFinite;
+    this.grid.importModifiedCells(data.gridCells);
+    this.undergroundGrid.importDugCells(data.dugCells);
+
+    this.ants = data.ants.map((saved) => {
+      const { carriedBroodIndex, fetchingBroodIndex, ...rest } = saved;
+      return {
+        ...rest,
+        carriedBrood: carriedBroodIndex !== null ? this.brood[carriedBroodIndex] : null,
+        fetchingBrood: fetchingBroodIndex !== null ? this.brood[fetchingBroodIndex] : null,
+      };
+    });
   }
 }

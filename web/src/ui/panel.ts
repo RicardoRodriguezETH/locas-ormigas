@@ -1,5 +1,6 @@
 import type { PheromoneAlgorithm } from '../core/config';
 import type { PaintableCellType } from '../core/grid';
+import type { GameMode } from '../core/simulation';
 
 export type Tool = 'pan' | PaintableCellType;
 export type ViewLayer = 'surface' | 'underground' | 'stats';
@@ -8,6 +9,11 @@ const LAYERS: Array<{ layer: ViewLayer; label: string }> = [
   { layer: 'surface', label: 'Earth' },
   { layer: 'underground', label: 'Underground' },
   { layer: 'stats', label: 'Stats' },
+];
+
+const MODES: Array<{ mode: GameMode; label: string }> = [
+  { mode: 'testing', label: 'Testing' },
+  { mode: 'gameplay', label: 'Gameplay' },
 ];
 
 const TOOLS: Array<{ tool: Tool; label: string }> = [
@@ -32,6 +38,8 @@ export interface PanelCallbacks {
   onTogglePheromones(show: boolean): void;
   onAlgorithmChange(algorithm: PheromoneAlgorithm): void;
   onLayerChange(layer: ViewLayer): void;
+  onModeChange(mode: GameMode): void;
+  onOpenSaveLoad(): void;
 }
 
 /** The left-hand tool sidebar: cell-painting tools, zoom controls, and live stats. Plain DOM
@@ -41,17 +49,55 @@ export class Panel {
 
   private readonly statsEl: HTMLDivElement;
   private readonly algorithmEl: HTMLDivElement;
+  private readonly modeBadgeEl: HTMLDivElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly algorithmButtons = new Map<PheromoneAlgorithm, HTMLButtonElement>();
   private readonly layerButtons = new Map<ViewLayer, HTMLButtonElement>();
+  private readonly modeButtons = new Map<GameMode, HTMLButtonElement>();
 
   constructor(host: HTMLElement, callbacks: PanelCallbacks) {
     host.replaceChildren();
+
+    // topmost and its own distinct badge style — "clearly visible" is the whole point, so this
+    // isn't just another same-looking label among the others.
+    const modeBadge = document.createElement('div');
+    modeBadge.className = 'panel-mode-badge';
+    host.appendChild(modeBadge);
+    this.modeBadgeEl = modeBadge;
 
     const stats = document.createElement('div');
     stats.className = 'panel-stats';
     host.appendChild(stats);
     this.statsEl = stats;
+
+    const modeHeading = document.createElement('div');
+    modeHeading.className = 'panel-heading';
+    modeHeading.textContent = 'Game mode';
+    host.appendChild(modeHeading);
+
+    const modeGroup = document.createElement('div');
+    modeGroup.className = 'panel-group panel-row';
+    for (const { mode, label } of MODES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-button';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        this.setSelectedMode(mode);
+        callbacks.onModeChange(mode);
+      });
+      modeGroup.appendChild(btn);
+      this.modeButtons.set(mode, btn);
+    }
+    host.appendChild(modeGroup);
+    this.setSelectedMode('testing');
+
+    const saveLoadButton = document.createElement('button');
+    saveLoadButton.type = 'button';
+    saveLoadButton.className = 'tool-button';
+    saveLoadButton.textContent = 'Save / Load…';
+    saveLoadButton.addEventListener('click', () => callbacks.onOpenSaveLoad());
+    host.appendChild(saveLoadButton);
 
     const layerGroup = document.createElement('div');
     layerGroup.className = 'panel-group panel-row';
@@ -142,6 +188,14 @@ export class Panel {
     for (const [l, btn] of this.layerButtons) {
       btn.classList.toggle('selected', l === layer);
     }
+  }
+
+  setSelectedMode(mode: GameMode): void {
+    for (const [m, btn] of this.modeButtons) {
+      btn.classList.toggle('selected', m === mode);
+    }
+    this.modeBadgeEl.textContent = mode === 'gameplay' ? 'Gameplay' : 'Testing';
+    this.modeBadgeEl.classList.toggle('gameplay', mode === 'gameplay');
   }
 
   setSelectedTool(tool: Tool): void {

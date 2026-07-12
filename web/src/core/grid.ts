@@ -28,6 +28,29 @@ export interface PheromoneInfo {
  * entry. */
 const DIFFUSION_NEIGHBORS = GRID_COM_SCAN.filter(([dx, dy]) => dx !== 0 || dy !== 0);
 
+/** Plain-data stand-in for a `Cell` instance, for save/load — see `WorldGrid.exportModifiedCells`.
+ * Fields are a union of every cell type's needs rather than a proper discriminated union per
+ * type, since it's only ever produced/consumed by the (de)serializer right next to it. */
+export interface SerializedCell {
+  type: 'grass' | 'food' | 'cave' | 'portal';
+  foodType?: FoodType;
+  nutrients?: number;
+  nutrientsMax?: number;
+  perishable?: boolean;
+  isCorpse?: boolean;
+  discovered?: boolean;
+  color?: 'blue' | 'orange';
+  linkGridX?: number;
+  linkGridY?: number;
+}
+
+export interface SerializedGridCell {
+  xg: number;
+  yg: number;
+  pass: boolean;
+  cell: SerializedCell | null;
+}
+
 export interface GridCellData {
   /** Can an ant walk through this tile? */
   pass: boolean;
@@ -70,6 +93,13 @@ export class WorldGrid {
 
   private cells = new Map<string, GridCellData>();
   private portalFactory = new PortalFactory();
+  /** 'gameplay' mode only (see `Simulation.gameMode`): every food cell placed from here on —
+   * whether seeded at map-build time or painted later with the tool sidebar — is finite
+   * (`perishable: true`) instead of the effectively-bottomless default 'testing' mode uses for
+   * fair, comparable pheromone-algorithm benchmarking. One flag rather than threading an option
+   * through every call site, so painting food mid-game stays consistent with map-seeded food
+   * without the UI needing to know or care which mode is active. */
+  foodIsFinite = false;
   /** Reused scratch buffer for `diffuseScent`'s neighbor-average pass, sized once on first use —
    * avoids reallocating a grid-sized array every relaxation step (this runs several times a
    * frame while the 'diffusion' algorithm is active). */
@@ -152,7 +182,7 @@ export class WorldGrid {
   seedCell(type: 'food' | 'cave', xg: number, yg: number, foodType?: FoodType): void {
     const data = this.get(xg, yg);
     data.pass = true;
-    data.cell = type === 'food' ? new FoodCell(foodType) : new CaveCell();
+    data.cell = type === 'food' ? new FoodCell(foodType, { perishable: this.foodIsFinite }) : new CaveCell();
   }
 
   /** Places a decorative grass tile by grid coords, only on empty passable ground (won't paint
@@ -191,7 +221,7 @@ export class WorldGrid {
         data.cell = new GrassCell();
         break;
       case 'food':
-        data.cell = new FoodCell();
+        data.cell = new FoodCell(undefined, { perishable: this.foodIsFinite });
         break;
       case 'cave':
         data.cell = new CaveCell();
@@ -207,6 +237,102 @@ export class WorldGrid {
       case 'ground':
         // removeCell above already cleared it back to plain ground
         break;
+    }
+  }
+
+  private serializeCell(cell: Cell | null): SerializedCell | null {
+    if (cell instanceof FoodCell) {
+      return {
+        type: 'food',
+        foodType: cell.foodType,
+        nutrients: cell.nutrients,
+        nutrientsMax: cell.nutrientsMax,
+        perishable: cell.perishable,
+        isCorpse: cell.isCorpse,
+        discovered: cell.discovered,
+      };
+    }
+    if (cell instanceof CaveCell) return { type: 'cave', discovered: cell.discovered };
+    if (cell instanceof GrassCell) return { type: 'grass' };
+    if (cell instanceof PortalCell) {
+      return { type: 'portal', color: cell.color, linkGridX: cell.link?.gridX, linkGridY: cell.link?.gridY };
+    }
+    return null;
+  }
+
+  /** Exports only cells that differ from a freshly-initialized grid (a wall, or anything
+   * placed) — for `Simulation` save/load. Pheromone trail data is deliberately excluded: it's
+   * transient and rebuilds naturally within moments of resuming play, and skipping it keeps a
+   * save's size independent of how long the colony's been running. */
+  exportModifiedCells(): SerializedGridCell[] {
+    const out: SerializedGridCell[] = [];
+    for (const [key, data] of this.cells) {
+      if (data.pass && !data.cell) continue; // default state, nothing to save
+      const [xg, yg] = key.split(',').map(Number);
+      out.push({ xg, yg, pass: data.pass, cell: this.serializeCell(data.cell) });
+    }
+    return out;
+  }
+
+  /** Restores cells previously captured by `exportModifiedCells`. Clears the grid back to
+   * default first, so loading into a grid that already has painted walls/food doesn't leave
+   * stale leftovers, then replays each saved cell. Portal links are resolved in a second pass
+   * since a linked portal's own cell might not exist yet on the first (note: `portalFactory`'s
+   * own blue/orange pairing state isn't restored, so a portal painted after loading always
+   * starts a fresh pairing rather than continuing one from the save — a minor cosmetic gap, not
+   * worth the extra bookkeeping for how rarely portals get painted mid-game). */
+  importModifiedCells(cells: SerializedGridCell[]): void {
+    this.cells.clear();
+    for (let xg = this.minXg; xg <= this.maxXg; xg++) {
+      for (let yg = this.minYg; yg <= this.maxYg; yg++) {
+        this.initCell(xg, yg, false);
+      }
+    }
+    // stale after clearing/rebuilding `cells` — references would point at discarded objects
+    this.diffusionCellArray = null;
+    this.diffusionNeighborIndices = null;
+
+    const portalCells: Array<{ data: GridCellData; saved: SerializedCell }> = [];
+    for (const saved of cells) {
+      const data = this.get(saved.xg, saved.yg);
+      data.pass = saved.pass;
+      if (!saved.cell) continue;
+      switch (saved.cell.type) {
+        case 'grass':
+          data.cell = new GrassCell();
+          break;
+        case 'food': {
+          const food = new FoodCell(saved.cell.foodType, {
+            nutrients: saved.cell.nutrientsMax,
+            perishable: saved.cell.perishable,
+            isCorpse: saved.cell.isCorpse,
+          });
+          if (saved.cell.nutrients !== undefined) food.nutrients = saved.cell.nutrients;
+          food.discovered = saved.cell.discovered ?? false;
+          data.cell = food;
+          break;
+        }
+        case 'cave': {
+          const cave = new CaveCell();
+          cave.discovered = saved.cell.discovered ?? false;
+          data.cell = cave;
+          break;
+        }
+        case 'portal': {
+          const portal = new PortalCell(saved.cell.color ?? 'blue');
+          portal.gridX = saved.xg;
+          portal.gridY = saved.yg;
+          portal.position = this.gridToWorldOrigin(saved.xg, saved.yg);
+          data.cell = portal;
+          portalCells.push({ data, saved: saved.cell });
+          break;
+        }
+      }
+    }
+    for (const { data, saved } of portalCells) {
+      if (saved.linkGridX === undefined || saved.linkGridY === undefined) continue;
+      const linkedCell = this.get(saved.linkGridX, saved.linkGridY).cell;
+      if (linkedCell instanceof PortalCell) (data.cell as PortalCell).link = linkedCell;
     }
   }
 

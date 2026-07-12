@@ -611,4 +611,71 @@ describe('Simulation', () => {
     for (let i = 0; i < 30 * 500; i++) sim.update();
     expect(sim.history.length).toBeLessThanOrEqual(400);
   });
+
+  describe('save/load', () => {
+    it('initGameplay seeds a true founding colony: one ant, the queen, no brood, finite food', () => {
+      const sim = new Simulation(cfg, { randomizeGrid: false });
+      sim.initGameplay();
+
+      expect(sim.gameMode).toBe('gameplay');
+      expect(sim.ants).toHaveLength(1);
+      expect(sim.ants[0].layer).toBe('surface');
+      expect(sim.brood).toHaveLength(0);
+      expect(sim.grid.foodIsFinite).toBe(true);
+
+      // one of Simulation's FOOD_SITES ({xg:11, yg:-9}), grid coords relative to the cave at (-6,-4)
+      const foodCell = sim.grid.get(-6 + 11, -4 - 9).cell as FoodCell;
+      expect(foodCell.perishable).toBe(true);
+    });
+
+    it("initGameplay's population cap targets a full colony, not ~1.3x the single starting ant", () => {
+      vi.restoreAllMocks();
+      const localCfg = { ...defaultConfig, numAnts: 50 };
+      const sim = new Simulation(localCfg, { randomizeGrid: false });
+      sim.initGameplay();
+      sim.foodStored = 1e9; // isolate reproduction capacity from food availability
+
+      for (let i = 0; i < 60000; i++) sim.update();
+
+      // grew well past a naive "1 * 1.3" cap; a real founding-colony ceiling near numAnts
+      expect(sim.ants.length).toBeGreaterThan(10);
+    }, 30000);
+
+    it('round-trips a running simulation through toSaveData/fromSaveData (including a JSON pass, as real save/load does)', () => {
+      vi.restoreAllMocks();
+      const sim = new Simulation(defaultConfig, { randomizeGrid: false });
+      sim.initGameplay();
+      sim.grid.setCellAtWorld('block', { x: 100, y: 100 }); // a player edit, to check it round-trips too
+      for (let i = 0; i < 3000; i++) sim.update(); // enough for brood/digging/movement to diverge from a fresh init
+
+      const saved = JSON.parse(JSON.stringify(sim.toSaveData()));
+      const restored = Simulation.fromSaveData(saved);
+
+      expect(restored.frame).toBe(sim.frame);
+      expect(restored.gameMode).toBe('gameplay');
+      expect(restored.grid.foodIsFinite).toBe(true);
+      expect(restored.foodStored).toBe(sim.foodStored);
+      expect(restored.ants).toHaveLength(sim.ants.length);
+      expect(restored.brood).toHaveLength(sim.brood.length);
+      expect(restored.undergroundGrid.dugCount()).toBe(sim.undergroundGrid.dugCount());
+      const [bxg, byg] = sim.grid.worldToGrid(100, 100);
+      expect(restored.grid.canPass(sim.grid.gridToWorldOrigin(bxg, byg))).toBe(false);
+
+      // shared carriedBrood/fetchingBrood references survive the round-trip as *references into
+      // the restored brood array*, not independently-forked copies
+      for (let i = 0; i < restored.ants.length; i++) {
+        const original = sim.ants[i];
+        const copy = restored.ants[i];
+        if (original.carriedBrood) {
+          const idx = sim.brood.indexOf(original.carriedBrood);
+          expect(copy.carriedBrood).toBe(restored.brood[idx]);
+        } else {
+          expect(copy.carriedBrood).toBeNull();
+        }
+      }
+
+      // the restored simulation is actually alive, not just a static snapshot
+      expect(() => restored.update()).not.toThrow();
+    }, 30000);
+  });
 });

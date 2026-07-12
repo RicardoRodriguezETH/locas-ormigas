@@ -235,6 +235,31 @@ export class UndergroundGrid {
     return this.dugCells;
   }
 
+  /** Dug-cell coordinates, for `Simulation` save/load. The undug majority of the map (including
+   * `diggable`-but-not-yet-dug frontier cells) isn't saved — only the permanent excavated shape
+   * matters; the frontier is ephemeral bookkeeping that `ensureDesignatedFrontier` naturally
+   * redesignates within a frame or two of resuming play. */
+  exportDugCells(): Array<[number, number]> {
+    const out: Array<[number, number]> = [];
+    for (const [key, data] of this.cells) {
+      if (!data.dug) continue;
+      const [xg, yg] = key.split(',').map(Number);
+      out.push([xg, yg]);
+    }
+    return out;
+  }
+
+  /** Restores a dug shape previously captured by `exportDugCells`, replaying each cell through
+   * `dig()` so the frontier/count bookkeeping it maintains comes along for free rather than
+   * needing to be separately saved and restored. */
+  importDugCells(coords: Array<[number, number]>): void {
+    this.cells.clear();
+    this.expansionCandidates.clear();
+    this.diggableFrontier.clear();
+    this.dugCells = 0;
+    for (const [xg, yg] of coords) this.dig(xg, yg);
+  }
+
   worldToGrid(x: number, y: number): [number, number] {
     const gridSize = this.config.mapGridSize;
     return [Math.floor(x / gridSize), Math.floor(y / gridSize)];

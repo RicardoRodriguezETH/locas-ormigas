@@ -1,11 +1,12 @@
 import { Application } from 'pixi.js';
 import type { PheromoneAlgorithm } from './core/config';
 import { defaultConfig } from './core/config';
-import { Simulation } from './core/simulation';
+import { type GameMode, Simulation } from './core/simulation';
 import { SimulationRenderer } from './render/renderer';
 import { loadTextures } from './render/textures';
 import { UndergroundRenderer } from './render/undergroundRenderer';
 import { Panel, type Tool, type ViewLayer } from './ui/panel';
+import { SaveLoadWindow } from './ui/saveLoadWindow';
 import { StatsOverlay } from './ui/statsOverlay';
 
 const IDEAL_CONTENT_HEIGHT = 720;
@@ -50,16 +51,15 @@ async function main(): Promise<void> {
     statsOverlay.visible = currentLayer === 'stats';
   };
 
-  /** (Re)creates the simulation and its renderers for the given algorithm, preserving the
-   * current camera view when one already exists (so switching algorithms doesn't jolt you
-   * back to the default zoom/pan). The underground renderer shares the surface renderer's
-   * camera, so panning/zooming stays in sync between the two overlays when toggling. */
-  function startSimulation(algorithm: PheromoneAlgorithm): void {
+  /** Swaps in an already-constructed (and initialized) Simulation, rebuilding the renderers to
+   * point at it and preserving the current camera view when one already exists (so switching
+   * modes or loading a save doesn't jolt you back to the default zoom/pan). The underground
+   * renderer shares the surface renderer's camera, so panning/zooming stays in sync between the
+   * two overlays. Does *not* handle algorithm changes — see `onAlgorithmChange` below, which
+   * hot-swaps the live config instead of going through here at all. */
+  function installSimulation(newSim: Simulation): void {
     const previousCamera = renderer?.camera;
-
-    const cfg = { ...defaultConfig, pheromoneAlgorithm: algorithm };
-    sim = new Simulation(cfg);
-    sim.init(numAnts);
+    sim = newSim;
 
     renderer?.destroy();
     undergroundRenderer?.destroy();
@@ -84,7 +84,18 @@ async function main(): Promise<void> {
     }
   }
 
-  startSimulation(defaultConfig.pheromoneAlgorithm);
+  /** Builds a brand-new colony for the given mode/algorithm and installs it — used for the
+   * initial boot and for mode switches, both of which really do need a fresh Simulation (unlike
+   * an algorithm change on its own). */
+  function startFresh(mode: GameMode, algorithm: PheromoneAlgorithm): void {
+    const cfg = { ...defaultConfig, pheromoneAlgorithm: algorithm };
+    const newSim = new Simulation(cfg);
+    if (mode === 'gameplay') newSim.initGameplay();
+    else newSim.init(numAnts);
+    installSimulation(newSim);
+  }
+
+  startFresh('testing', defaultConfig.pheromoneAlgorithm);
   window.addEventListener('resize', updateContentScale);
 
   let currentTool: Tool = 'pan';
@@ -100,15 +111,34 @@ async function main(): Promise<void> {
       showPheromones = show;
       renderer.showPheromones = show;
     },
+    // hot-swapped on the *running* colony instead of restarting — `sim.config` is read fresh
+    // every frame throughout the simulation, so just mutating the live field is enough (`config`
+    // itself is a readonly binding, but nothing stops mutating a field on the object it points
+    // at). A restart here would throw away an in-progress 'gameplay' colony every time you just
+    // wanted to compare algorithms.
     onAlgorithmChange: (algorithm) => {
-      startSimulation(algorithm);
+      sim.config.pheromoneAlgorithm = algorithm;
     },
     onLayerChange: (layer) => {
       currentLayer = layer;
       applyLayerVisibility();
     },
+    onModeChange: (mode) => {
+      startFresh(mode, sim.config.pheromoneAlgorithm);
+    },
+    onOpenSaveLoad: () => {
+      saveLoadWindow.show();
+    },
   });
   panel.setSelectedAlgorithm(defaultConfig.pheromoneAlgorithm);
+
+  const saveLoadWindow = new SaveLoadWindow(document.body, () => sim, {
+    onLoad: (loadedSim) => {
+      installSimulation(loadedSim);
+      panel.setSelectedAlgorithm(loadedSim.config.pheromoneAlgorithm);
+      panel.setSelectedMode(loadedSim.gameMode);
+    },
+  });
   // `resizeTo: canvasHost` took its first snapshot back at app.init(), before the panel above had
   // any content — on the mobile stacked layout the panel's height is content-driven, so that
   // snapshot was of a not-yet-final canvas-host box (its empty panel sibling briefly ceded it
