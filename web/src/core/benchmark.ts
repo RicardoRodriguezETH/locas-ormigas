@@ -35,7 +35,7 @@ function yieldToEventLoop(): Promise<void> {
  * simulation is currently on screen. Chunked with periodic yields so a several-second run
  * doesn't freeze the tab. */
 export async function runPheromoneBenchmark(options: BenchmarkOptions = {}): Promise<BenchmarkResult[]> {
-  const frames = options.frames ?? 20000;
+  const frames = options.frames ?? 50000;
   const antCount = options.antCount ?? 300;
   const results: BenchmarkResult[] = [];
 
