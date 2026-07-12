@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - claude/ant-game-modernize-bahifu
     paths:
       - 'web/**'
       - '.github/workflows/deploy-pages.yml'
