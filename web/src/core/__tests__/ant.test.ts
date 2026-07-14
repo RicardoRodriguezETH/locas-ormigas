@@ -153,6 +153,19 @@ describe('ant', () => {
     expect(searchingAngle).toBeGreaterThan(informedAngle);
   });
 
+  it('biases wander turns to alternate direction instead of repeating the last one', () => {
+    const cfg = { ...defaultConfig, antErraticSearching: 0.5, antTurnAlternationBias: 1 }; // always flip when it would repeat
+    const ant = createAnt(cfg, { x: 0, y: 0 }, { x: 1, y: 0 });
+    ant.lastTurnSign = 1; // as if the previous turn rotated positively
+
+    vi.spyOn(Math, 'random').mockReturnValueOnce(1).mockReturnValueOnce(0); // raw turn positive, then "flip" roll succeeds
+    updateAnt(ant, cfg, 0);
+
+    // a same-signed raw turn (positive) got flipped to negative — direction rotates clockwise (y < 0)
+    expect(ant.direction.y).toBeLessThan(0);
+    expect(ant.lastTurnSign).toBe(-1);
+  });
+
   it('steers away from an obstacle sensed ahead', () => {
     const ant = createAnt(defaultConfig, { x: 0, y: 0 }, { x: 1, y: 0 });
     // blocked straight ahead (x>20) and to the right (y>5), clear to the left -> should turn left

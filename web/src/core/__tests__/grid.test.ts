@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createAnt } from '../ant';
 import { CaveCell, FoodCell } from '../cells';
 import { defaultConfig } from '../config';
-import { WorldGrid } from '../grid';
+import { WorldGrid, readTraffic } from '../grid';
 
 const cfg = { ...defaultConfig, mapMinX: -32, mapMinY: -32, mapMaxX: 32, mapMaxY: 32, mapGridSize: 16 };
 
@@ -11,6 +11,15 @@ describe('WorldGrid', () => {
     const grid = new WorldGrid(cfg, { randomize: false });
     expect(grid.worldToGrid(0, 0)).toEqual([0, 0]);
     expect(grid.worldToGrid(20, -5)).toEqual([1, -1]);
+  });
+
+  it('decays a cell\'s recent-traffic count the same way pheromone strength decays', () => {
+    const grid = new WorldGrid(cfg, { randomize: false });
+    const cell = grid.get(0, 0);
+    cell.traffic = 10;
+    cell.trafficLastUpdated = 0;
+    expect(readTraffic(cell, 0, 0.99)).toBe(10); // unchanged at the moment it was set
+    expect(readTraffic(cell, 100, 0.99)).toBeCloseTo(10 * 0.99 ** 100);
   });
 
   it('starts fully passable when not randomized', () => {

@@ -45,6 +45,11 @@ export interface Ant {
   color: readonly [number, number, number];
   lastCollisionTime: number;
 
+  /** Sign (-1/0/1) of this ant's last erratic-wander turn — used by `updateAnt` to bias the next
+   * turn toward alternating side (negative turn autocorrelation), not a genuinely new behavior,
+   * just tracking state the turn-alternation logic needs. See `SimConfig.antTurnAlternationBias`. */
+  lastTurnSign: number;
+
   /** 'integration' algorithm only: running path-integration vector — accumulated displacement
    * since this ant last departed the cave (zeroed on arrival there, see `CaveCell.affectAnt`),
    * updated every surface frame in `Simulation.stepAnt`. Real ants derive their "home vector"
@@ -199,6 +204,7 @@ export function createAnt(
 
     color: [255, 255, 255],
     lastCollisionTime: -1,
+    lastTurnSign: 0,
 
     homeVector: { x: 0, y: 0 },
     lastFoodQuality: 1,
@@ -352,7 +358,16 @@ export function updateAnt(ant: Ant, cfg: SimConfig, frame: number): void {
   // tight, mostly-straight wander while recently guided by a trail; loopier, more undirected
   // search otherwise — like a recruited forager vs. a scout
   const erratic = frame < ant.informedUntil ? cfg.antErraticInformed : cfg.antErraticSearching;
-  ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
+  const rawTurn = erratic * Math.random() - erratic * 0.5;
+  // Negative turn autocorrelation: real foragers' successive turns tend to alternate side more
+  // than independent randomness would (measured in Temnothorax: ~78% of ants show a significant
+  // negative autocorrelation at ~3 body-lengths), which spreads search out and cuts down on
+  // re-crossing just-searched ground instead of drifting in one persistent curve. When the raw
+  // turn agrees in sign with the last one, `antTurnAlternationBias` is the chance we flip it to
+  // disagree instead.
+  const turn = rawTurn !== 0 && Math.sign(rawTurn) === ant.lastTurnSign && Math.random() < cfg.antTurnAlternationBias ? -rawTurn : rawTurn;
+  ant.direction = rotate(ant.direction, turn);
+  if (turn !== 0) ant.lastTurnSign = Math.sign(turn);
   ant.friction = 1;
 }
 

@@ -56,6 +56,13 @@ export interface GridCellData {
   pass: boolean;
   cell: Cell | null;
   pheromones: Record<Interest, PheromoneInfo>;
+  /** 'integration' algorithm only: a decaying count of how many ants have recently passed
+   * through this tile — not per-interest, unlike `pheromones` (crowding is about *traffic*, not
+   * about food or the cave specifically). Read with `readTraffic`, bumped in
+   * `Simulation.communicatePheromonesIntegration`. See `SimConfig.integrationCrowdingHalfSaturation`
+   * for why this exists. */
+  traffic: number;
+  trafficLastUpdated: number;
 }
 
 /** Current concentration of a pheromone deposit, decayed for the time elapsed since it was
@@ -65,6 +72,13 @@ export function readPheromoneStrength(info: PheromoneInfo, frame: number, decayP
   const elapsed = frame - info.lastUpdated;
   if (elapsed <= 0) return info.strength;
   return info.strength * decayPerFrame ** elapsed;
+}
+
+/** Current decayed traffic count — same lazy-decay shape as `readPheromoneStrength`. */
+export function readTraffic(cell: GridCellData, frame: number, decayPerFrame: number): number {
+  const elapsed = frame - cell.trafficLastUpdated;
+  if (elapsed <= 0) return cell.traffic;
+  return cell.traffic * decayPerFrame ** elapsed;
 }
 
 /** Current flow vector, decayed the same way as `readPheromoneStrength` — shrinking the
@@ -145,6 +159,8 @@ export class WorldGrid {
         food: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 }, scent: 0 },
         cave: { strength: 0, lastUpdated: 0, time: -1, where: { x: 0, y: 0 }, flow: { x: 0, y: 0 }, scent: 0 },
       },
+      traffic: 0,
+      trafficLastUpdated: 0,
     };
     // light scattered grass for texture; no random blocks (those are placed deliberately as
     // obstacles in `Simulation.buildBaseMap`, and stray ones were an ascend/spawn hazard)
