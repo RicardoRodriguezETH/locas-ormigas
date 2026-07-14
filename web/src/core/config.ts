@@ -81,6 +81,13 @@ export interface SimConfig {
   antComNeedFrameStep: [number, number];
   /** Distance within which an ant can identify/avoid things. */
   antSightDistance: number;
+  /** Frames a foraging ant spends frozen, chewing off a bite, once it reaches a food cell before
+   * actually picking up cargo and departing — real ants don't teleport a piece of food into
+   * their mandibles the instant they touch it. The ant is fully paused for the duration (see
+   * `Ant.chewingUntil`), not just visually delayed. This is the first of what's meant to become a
+   * general convention: timed actions instead of instant ones (see `antQueenFeedFrames` for the
+   * other current example). */
+  antFoodChewFrames: number;
   /** How many past positions each ant remembers (used as its pheromone "where"). */
   antPositionMemorySize: number;
   /** Heading jitter applied while confidently following a known trail — tight and mostly
@@ -284,17 +291,38 @@ export interface SimConfig {
    * `queenEggFoodCost` from `foodStored`; if there isn't enough, she just waits and retries
    * `queenEggRetryFrames` later rather than skipping a full cycle. */
   queenEggCooldownFramesRange: [number, number];
+  /** Paid out of `Queen.foodStash`, not the colony's shared larder total directly — she has to
+   * actually be fed by a feeder ant (`Simulation.tryBecomeQueenFeeder`) to lay, the same way real
+   * queens are fed via trophallaxis rather than drawing on the colony's food in the abstract. */
   queenEggFoodCost: number;
   queenEggRetryFrames: number;
+  /** Frames a feeder ant spends physically handing food to the queen once it's walked to her
+   * chamber, before it actually transfers into her `foodStash` — a timed hand-off, not an instant
+   * transfer (see `Ant.queenFeedUntil`, and `antFoodChewFrames`'s doc comment for the convention
+   * this follows). */
+  antQueenFeedFrames: number;
   /** Homeostatic laying target as a multiple of the starting population: the queen lays to keep
    * living workers + in-pipeline brood near `initialPopulation * this`, replacing natural-death
    * losses so the colony holds steady rather than growing unboundedly or bleeding out. */
   populationCapMultiplier: number;
-  /** Upper bound on `foodStored`. Once laying is satisfied and the colony is at its population
-   * target, food has no other sink, so without a cap deliveries pile it up without limit (an
-   * ever-growing "Food stored" stat and a maxed-out larder pile). A cap models finite larder
-   * space: surplus foragers still make trips, it just stops accumulating. */
-  foodStorageCap: number;
+  /** Storage is discrete tiles, not one shared number — the larder chamber's cells (see
+   * `UndergroundGrid.seedStarterNest`'s `larderCells`) each hold up to this many food units; a
+   * delivering ant always targets whichever tile currently has the *least* fill, so tiles fill up
+   * roughly in turn rather than one pile absorbing everything, and once every tile is at capacity
+   * the colony's total storage is naturally capped at `tiles × this` — no separate global cap
+   * needed. `Simulation.foodStored` is the live sum across all tiles, kept for the egg-cost/larva-
+   * feeding checks and the UI, but is no longer where deliveries are actually written. */
+  foodTileCapacity: number;
+  /** Same discrete-tile idea as `foodTileCapacity`, applied to the nursery: each cell holds up to
+   * this many brood items, but — unlike a food tile, which is happy to hold any mix — a brood
+   * tile is locked to a *single* developmental stage at a time (all-eggs, all-larvae, or
+   * all-pupae). When an item advances stage while already settled on a tile, that tile is now the
+   * wrong stage for it: `Simulation` vacates its slot and an idle underground ant physically
+   * relocates it to a same-stage tile (creating one if needed) — the same nurse pipeline that
+   * carries a brand new egg from the queen in the first place, just with a different starting
+   * position. Real colonies do exactly this: continuously sorting/relocating brood by stage
+   * between chambers, not just once at laying. */
+  broodTileCapacity: number;
   /** Nutrients in the corpse a surface ant leaves when it dies — a small, finite food source
    * (see `Simulation.dropCorpse`), picked clean after this many carry-offs. */
   corpseNutrients: number;
@@ -402,6 +430,7 @@ export const defaultConfig: SimConfig = {
   antComEveryFrame: false,
   antComNeedFrameStep: [3, 13],
   antSightDistance: 30,
+  antFoodChewFrames: 180,
   antPositionMemorySize: 10,
   antErraticInformed: 0.08,
   antErraticSearching: 0.2,
@@ -461,8 +490,10 @@ export const defaultConfig: SimConfig = {
   queenEggCooldownFramesRange: [60, 140],
   queenEggFoodCost: 5,
   queenEggRetryFrames: 60,
+  antQueenFeedFrames: 120,
   populationCapMultiplier: 1.3,
-  foodStorageCap: 400,
+  foodTileCapacity: 20,
+  broodTileCapacity: 5,
   corpseNutrients: 20,
   seededBroodFraction: 0.06,
   antUndergroundDutyDaysRange: [1, 3],

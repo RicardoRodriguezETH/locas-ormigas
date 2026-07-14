@@ -12,10 +12,16 @@ describe('cells', () => {
     expect(ant.friction).toBe(0.8);
   });
 
-  it('food fills cargo and flips an ant looking for food onto the cave task', () => {
+  it('food fills cargo and flips an ant looking for food onto the cave task, after a chewing delay', () => {
     const ant = createAnt(defaultConfig, { x: 0, y: 0 }, { x: 1, y: 0 });
     ant.lookingFor = 'food';
-    new FoodCell().affectAnt(ant, ctx(10));
+    const food = new FoodCell();
+    food.affectAnt(ant, ctx(10)); // arrival: starts chewing, no pickup yet
+    expect(ant.chewingUntil).toBe(10 + defaultConfig.antFoodChewFrames);
+    expect(ant.cargo.count).toBe(0);
+    expect(ant.lookingFor).toBe('food');
+
+    food.affectAnt(ant, ctx(10 + defaultConfig.antFoodChewFrames)); // chew finished: picks up
     expect(ant.cargo.count).toBe(ant.cargo.capacity);
     expect(ant.lookingFor).toBe('cave');
   });

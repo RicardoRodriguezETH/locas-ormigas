@@ -69,19 +69,31 @@ export class FoodCell implements Cell {
 
   affectAnt(ant: Ant, ctx: CellContext): void {
     if (ant.lookingFor !== 'food') return;
-    if (this.perishable && this.nutrients <= 0) return; // picked clean; nothing left to take
-    ant.cargo.count = ant.cargo.capacity;
-    // 'legacy' faithfully never resets this (see Simulation.communicatePheromonesClassic) — every
-    // other algorithm resets it because a fresh goal deserves to be receptive to any lead again.
-    if (ctx.config.pheromoneAlgorithm !== 'legacy') ant.maxLeadScore = 0;
-    // 'integration' only (harmless bookkeeping otherwise): "desired volume" recruitment is an
-    // all-or-none per-trip decision biased by food quality, not automatic — see
-    // SimConfig.integrationRecruitBaseProbability/integrationRecruitQualityBonus.
-    ant.lastFoodQuality = this.nutrientsMax > 0 ? this.nutrients / this.nutrientsMax : 1;
-    const recruitProbability = ctx.config.integrationRecruitBaseProbability + ctx.config.integrationRecruitQualityBonus * ant.lastFoodQuality;
-    ant.recruitsThisTrip = Math.random() < recruitProbability;
-    taskFound(ant, ctx.config, ctx.frame);
-    if (this.perishable) this.nutrients -= 1;
+
+    if (ant.chewingUntil >= 0) {
+      if (ctx.frame < ant.chewingUntil) return; // still chewing off this bite
+      ant.chewingUntil = -1;
+      ant.cargo.count = ant.cargo.capacity;
+      // 'legacy' faithfully never resets this (see Simulation.communicatePheromonesClassic) — every
+      // other algorithm resets it because a fresh goal deserves to be receptive to any lead again.
+      if (ctx.config.pheromoneAlgorithm !== 'legacy') ant.maxLeadScore = 0;
+      // 'integration' only (harmless bookkeeping otherwise): "desired volume" recruitment is an
+      // all-or-none per-trip decision biased by food quality, not automatic — see
+      // SimConfig.integrationRecruitBaseProbability/integrationRecruitQualityBonus.
+      ant.lastFoodQuality = this.nutrientsMax > 0 ? this.nutrients / this.nutrientsMax : 1;
+      const recruitProbability = ctx.config.integrationRecruitBaseProbability + ctx.config.integrationRecruitQualityBonus * ant.lastFoodQuality;
+      ant.recruitsThisTrip = Math.random() < recruitProbability;
+      taskFound(ant, ctx.config, ctx.frame);
+      if (this.perishable) this.nutrients -= 1;
+      return;
+    }
+    if (this.perishable && this.nutrients <= 0) return; // picked clean; nothing left to start chewing on
+
+    // A few seconds chewing off a bite before departing with it, rather than an instant pickup —
+    // see `Ant.chewingUntil`'s doc comment for the "timed action, not instant" convention this
+    // establishes (also followed by `Simulation`'s queen-feeding hand-off).
+    ant.chewingUntil = ctx.frame + ctx.config.antFoodChewFrames;
+    ant.speed = 0;
   }
 }
 

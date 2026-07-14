@@ -39,7 +39,7 @@ describe('Simulation', () => {
     expect(sim.grid.canPass({ x: 5, y: 5 })).toBe(false);
   });
 
-  it('fills cargo and flips the task when an ant reaches food it was looking for', () => {
+  it('fills cargo and flips the task when an ant reaches food it was looking for, after a chewing delay', () => {
     const sim = new Simulation(cfg, { randomizeGrid: false });
     sim.grid.seedCell('food', 0, 0);
 
@@ -48,7 +48,11 @@ describe('Simulation', () => {
     ant.lookingFor = 'food';
     sim.ants = [ant];
 
-    sim.update();
+    sim.update(); // arrival: starts chewing, no pickup yet
+    expect(ant.cargo.count).toBe(0);
+    expect(ant.lookingFor).toBe('food');
+
+    for (let i = 0; i < cfg.antFoodChewFrames; i++) sim.update();
 
     expect(ant.cargo.count).toBe(ant.cargo.capacity);
     expect(ant.lookingFor).toBe('cave');
@@ -380,7 +384,7 @@ describe('Simulation', () => {
     ant.lookingFor = 'food';
     ant.maxLeadScore = 999;
     sim.ants = [ant];
-    sim.update(); // steps onto the food, completing the goal switch
+    for (let i = 0; i <= cfg.antFoodChewFrames; i++) sim.update(); // steps onto the food, chews, completes the goal switch
 
     expect(ant.lookingFor).toBe('cave');
     expect(ant.maxLeadScore).toBe(999); // untouched
@@ -639,7 +643,10 @@ describe('Simulation', () => {
     // unseeded Math.random() made this test's pass/fail depend on which run it happened to be
     // (flaky in CI); a fixed seed keeps the same varied-looking sequence every time.
     vi.spyOn(Math, 'random').mockImplementation(seededRandom(42));
-    const sim = new Simulation(defaultConfig, { randomizeGrid: false });
+    // long lifespans so a natural death can't coincidentally offset the eclosion this test is
+    // actually checking for, making population net out unchanged over the window
+    const localCfg = { ...defaultConfig, antLifespanMinDays: 5000, antLifespanMaxDays: 6000 };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
     sim.init(600);
 
     // brood pipeline is pre-populated across stages rather than starting empty
@@ -706,7 +713,8 @@ describe('Simulation', () => {
       const localCfg = { ...defaultConfig, numAnts: 50 };
       const sim = new Simulation(localCfg, { randomizeGrid: false });
       sim.initGameplay();
-      sim.foodStored = 1e9; // isolate reproduction capacity from food availability
+      sim.queen.foodStash = 1e9; // isolate reproduction capacity from food availability...
+      for (const tile of sim.larderTiles) tile.fill = 1e9; // ...for both her own laying and larva feeding
 
       for (let i = 0; i < 60000; i++) sim.update();
 

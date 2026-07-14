@@ -133,16 +133,25 @@ export class UndergroundGrid {
     }
   }
 
+  /** Grid coordinates of a filled disc of radius `radiusCells` around (cx, cy) — the same shape
+   * `digChamber` excavates, exposed separately so callers (namely `seedStarterNest`) can get the
+   * actual cell membership of a chamber back, not just dig it blind. */
+  static discCells(cx: number, cy: number, radiusCells: number): Array<[number, number]> {
+    const cells: Array<[number, number]> = [];
+    for (let dx = -radiusCells; dx <= radiusCells; dx++) {
+      for (let dy = -radiusCells; dy <= radiusCells; dy++) {
+        if (dx * dx + dy * dy <= radiusCells * radiusCells) cells.push([cx + dx, cy + dy]);
+      }
+    }
+    return cells;
+  }
+
   /** Digs a filled disc of radius `radiusCells` around (cx, cy) — used to seed the starting
    * entrance chamber under the cave, so ants have somewhere to stand (and dig outward from)
    * the moment they first descend. */
   digChamber(cx: number, cy: number, radiusCells: number): void {
-    for (let dx = -radiusCells; dx <= radiusCells; dx++) {
-      for (let dy = -radiusCells; dy <= radiusCells; dy++) {
-        if (dx * dx + dy * dy <= radiusCells * radiusCells) {
-          this.dig(cx + dx, cy + dy);
-        }
-      }
+    for (const [x, y] of UndergroundGrid.discCells(cx, cy, radiusCells)) {
+      this.dig(x, y);
     }
   }
 
@@ -189,6 +198,12 @@ export class UndergroundGrid {
     nurseryChamberYg: number;
     larderChamberXg: number;
     larderChamberYg: number;
+    /** Full cell membership of the nursery/larder chambers (not just their center), for
+     * `Simulation` to lay out discrete storage tiles across — see `SimConfig.broodTileCapacity`/
+     * `foodTileCapacity`. The queen's own chamber has no tile concept (she isn't a storage
+     * system), so only these two are exposed. */
+    nurseryCells: Array<[number, number]>;
+    larderCells: Array<[number, number]>;
   } {
     this.digChamber(entranceXg, entranceYg, 1);
 
@@ -208,6 +223,8 @@ export class UndergroundGrid {
     let nurseryChamberYg = entranceYg;
     let larderChamberXg = entranceXg;
     let larderChamberYg = entranceYg;
+    let nurseryCells: Array<[number, number]> = [];
+    let larderCells: Array<[number, number]> = [];
     branches.forEach((branch, i) => {
       const trunkX = entranceXg;
       const trunkY = entranceYg + branch.alongTrunk;
@@ -220,13 +237,24 @@ export class UndergroundGrid {
       } else if (i === 1) {
         nurseryChamberXg = chamberX;
         nurseryChamberYg = trunkY;
+        nurseryCells = UndergroundGrid.discCells(chamberX, trunkY, branch.radius);
       } else if (i === 2) {
         larderChamberXg = chamberX;
         larderChamberYg = trunkY;
+        larderCells = UndergroundGrid.discCells(chamberX, trunkY, branch.radius);
       }
     });
 
-    return { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg };
+    return {
+      queenChamberXg,
+      queenChamberYg,
+      nurseryChamberXg,
+      nurseryChamberYg,
+      larderChamberXg,
+      larderChamberYg,
+      nurseryCells,
+      larderCells,
+    };
   }
 
   /** Count of excavated tiles, for comparing against a population-proportional target volume

@@ -22,10 +22,30 @@ export interface Brood {
   /** True once a nurse has delivered this item to the nursery chamber. Newly-laid eggs start
    * false (still sitting where the queen laid them) and are eligible for pickup. */
   atNursery: boolean;
+  /** Index into `Simulation.nurseryTiles` this item currently occupies, or null while loose (not
+   * yet placed, or between tiles after a stage change vacated its old one) — see
+   * `SimConfig.broodTileCapacity`'s doc comment. A nurse only ever picks up brood with a null
+   * `tileIndex`, whether that's a brand new egg from the queen or an older item that just
+   * outgrew its tile's stage; both are "needs a same-stage tile" the same way. */
+  tileIndex: number | null;
+  /** Which of the tile's `broodTileCapacity` slots this item occupies, or null alongside
+   * `tileIndex`. Kept separate from the tile's own occupancy count so a vacated slot can be
+   * reused without colliding with whichever other item currently holds a numerically-later
+   * slot — see `Simulation.vacateBroodTile`. */
+  slotIndex: number | null;
 }
 
 export function createEgg(position: Vector2): Brood {
-  return { stage: 'egg', position: { ...position }, ageDays: 0, nutritionReceived: 0, beingCarried: false, atNursery: false };
+  return {
+    stage: 'egg',
+    position: { ...position },
+    ageDays: 0,
+    nutritionReceived: 0,
+    beingCarried: false,
+    atNursery: false,
+    tileIndex: null,
+    slotIndex: null,
+  };
 }
 
 /** Creates a brood item already partway through development, for seeding an *established*
@@ -51,7 +71,7 @@ export function createSeededBrood(position: Vector2, totalAgeDays: number, cfg: 
     stage = 'pupa';
     ageDays = totalAgeDays - larvaEnd;
   }
-  return { stage, position: { ...position }, ageDays, nutritionReceived, beingCarried: false, atNursery: true };
+  return { stage, position: { ...position }, ageDays, nutritionReceived, beingCarried: false, atNursery: true, tileIndex: null, slotIndex: null };
 }
 
 export function advanceBroodAge(brood: Brood, cfg: SimConfig): void {
@@ -97,8 +117,12 @@ export interface Queen {
   ageDays: number;
   /** Frame of her next egg-laying attempt (or retry, if the previous attempt lacked food). */
   nextEggAttemptFrame: number;
+  /** Food physically carried to her by a feeder ant (see `Simulation.tryBecomeQueenFeeder`) —
+   * egg-laying draws from this personal stash, not the colony's shared larder total directly.
+   * She has to actually be fed, not just have the colony be food-rich in the abstract. */
+  foodStash: number;
 }
 
 export function createQueen(position: Vector2): Queen {
-  return { position: { ...position }, ageDays: 0, nextEggAttemptFrame: 0 };
+  return { position: { ...position }, ageDays: 0, nextEggAttemptFrame: 0, foodStash: 0 };
 }

@@ -14,7 +14,7 @@ import {
   updateAnt,
   updateRestingMovement,
 } from './ant';
-import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
+import { type Brood, type BroodStage, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { CaveCell, FoodCell, type FoodType } from './cells';
 import { type PaintableCellType, type SerializedGridCell, WorldGrid, readPheromoneFlow, readPheromoneStrength, readTraffic } from './grid';
@@ -58,6 +58,42 @@ const GRASS_PATCHES = 22;
  * individual's random wander before anything can be found at all. */
 const GAMEPLAY_STARTING_ANTS = 5;
 
+/** One discrete storage slot in the larder chamber — see `SimConfig.foodTileCapacity`'s doc
+ * comment. `Simulation.larderTiles` is built once, from the larder chamber's actual cell
+ * membership, in `setupMapAndNest`. */
+export interface FoodTile {
+  xg: number;
+  yg: number;
+  position: Vector2;
+  fill: number;
+}
+
+/** One discrete storage slot in the nursery chamber — see `SimConfig.broodTileCapacity`'s doc
+ * comment. `stage` is null while the tile is empty (not yet claimed by any stage); `occupied`
+ * tracks which of the tile's `broodTileCapacity` slots are currently taken, indexed by each
+ * brood item's own `Brood.slotIndex` — a plain count can't be reused safely once slots start
+ * vacating out of order (see `Simulation.vacateBroodTile`). `Simulation.nurseryTiles` is built
+ * once, from the nursery chamber's actual cell membership, in `setupMapAndNest`. */
+export interface BroodTile {
+  xg: number;
+  yg: number;
+  position: Vector2;
+  stage: BroodStage | null;
+  occupied: boolean[];
+}
+
+/** Small per-slot offsets so multiple brood items settled on one tile render as visibly distinct
+ * individuals instead of one overlapping stack — a quincunx (center + 4 corners) scaled well
+ * inside a single grid cell's own footprint (half of `mapGridSize` is 8, so ±4 leaves a clear
+ * margin). Indexed by `Brood.slotIndex`, so `broodTileCapacity` must not exceed this length. */
+const BROOD_SLOT_OFFSETS: ReadonlyArray<Vector2> = [
+  { x: 0, y: 0 },
+  { x: -4, y: -4 },
+  { x: 4, y: -4 },
+  { x: -4, y: 4 },
+  { x: 4, y: 4 },
+];
+
 /** One point in `Simulation.history` — a cheap scalar snapshot for the stats overlay's trend
  * charts, sampled every `HISTORY_SAMPLE_INTERVAL_FRAMES` frames regardless of whether that
  * overlay is currently visible, so opening it later still shows the colony's real history
@@ -98,7 +134,8 @@ export interface SaveData {
   larderPosition: Vector2;
   queen: Queen;
   brood: Brood[];
-  foodStored: number;
+  larderTiles: FoodTile[];
+  nurseryTiles: BroodTile[];
   initialPopulation: number;
   undergroundAntCount: number;
   deliveryEmaFast: number;
@@ -137,9 +174,22 @@ export class Simulation {
   larderPosition: Vector2 = { x: 0, y: 0 };
   queen: Queen = createQueen(this.queenChamberPosition);
   brood: Brood[] = [];
-  /** Colony-wide stored food, fed by underground-delivered cargo and spent on egg-laying and
-   * larva feeding — see `Simulation.beginUndergroundDelivery`/`updateQueenAndBrood`. */
-  foodStored = 0;
+  /** Discrete larder storage slots, built from the larder chamber's actual cell membership in
+   * `setupMapAndNest` — see `SimConfig.foodTileCapacity`'s doc comment. */
+  larderTiles: FoodTile[] = [];
+  /** Discrete nursery storage slots, built the same way — see `SimConfig.broodTileCapacity`'s
+   * doc comment. */
+  nurseryTiles: BroodTile[] = [];
+  /** Colony-wide stored food — the live sum across every `larderTiles` fill level, not storage in
+   * its own right. Spent on larva feeding (`updateQueenAndBrood`); egg-laying draws on
+   * `queen.foodStash` instead, which only grows via an actual feeding trip (see
+   * `tryBecomeQueenFeeder`). Deliveries are written directly into a specific tile (see
+   * `depositFoodUnit`), never into this sum. */
+  get foodStored(): number {
+    let total = 0;
+    for (const tile of this.larderTiles) total += tile.fill;
+    return total;
+  }
   /** Number of ants spawned at `init` — the base the reproduction cap is measured against (see
    * `updateQueenAndBrood`), so a colony started with fewer ants (e.g. the reduced mobile count)
    * caps proportionally rather than always against the config default. */
@@ -191,7 +241,6 @@ export class Simulation {
     this.setupMapAndNest();
     this.queen = createQueen(this.queenChamberPosition);
     this.brood = [];
-    this.foodStored = 0;
     this.history = [];
 
     this.ants = [];
@@ -241,7 +290,6 @@ export class Simulation {
     this.setupMapAndNest();
     this.queen = createQueen(this.queenChamberPosition);
     this.brood = [];
-    this.foodStored = 0;
     this.history = [];
 
     this.ants = [];
@@ -266,12 +314,34 @@ export class Simulation {
     this.cavePosition = add(this.grid.gridToWorldOrigin(caveGx, caveGy), scale({ x: this.config.mapGridSize, y: this.config.mapGridSize }, 0.5));
     this.buildBaseMap(caveGx, caveGy);
     // pre-built starter nest rather than an empty seed — see UndergroundGrid.seedStarterNest
-    const { queenChamberXg, queenChamberYg, nurseryChamberXg, nurseryChamberYg, larderChamberXg, larderChamberYg } =
-      this.undergroundGrid.seedStarterNest(caveGx, caveGy);
+    const {
+      queenChamberXg,
+      queenChamberYg,
+      nurseryChamberXg,
+      nurseryChamberYg,
+      larderChamberXg,
+      larderChamberYg,
+      nurseryCells,
+      larderCells,
+    } = this.undergroundGrid.seedStarterNest(caveGx, caveGy);
     const half = this.config.mapGridSize / 2;
     this.queenChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(queenChamberXg, queenChamberYg), { x: half, y: half });
     this.nurseryChamberPosition = add(this.undergroundGrid.gridToWorldOrigin(nurseryChamberXg, nurseryChamberYg), { x: half, y: half });
     this.larderPosition = add(this.undergroundGrid.gridToWorldOrigin(larderChamberXg, larderChamberYg), { x: half, y: half });
+
+    this.larderTiles = larderCells.map(([xg, yg]) => ({
+      xg,
+      yg,
+      position: add(this.undergroundGrid.gridToWorldOrigin(xg, yg), { x: half, y: half }),
+      fill: 0,
+    }));
+    this.nurseryTiles = nurseryCells.map(([xg, yg]) => ({
+      xg,
+      yg,
+      position: add(this.undergroundGrid.gridToWorldOrigin(xg, yg), { x: half, y: half }),
+      stage: null,
+      occupied: new Array(this.config.broodTileCapacity).fill(false),
+    }));
   }
 
   /** Seeds the nursery with brood already spread across all developmental stages, plus a little
@@ -284,16 +354,28 @@ export class Simulation {
    * makes new workers start eclosing within the first minute and keeps a steady trickle after. */
   private seedEstablishedBrood(): void {
     const cfg = this.config;
-    // enough for the queen to keep laying through the early game before deliveries have ramped up
-    this.foodStored = cfg.queenEggFoodCost * 12;
+    // enough for the queen to keep laying, and separately for larvae to keep being fed, through
+    // the early game before deliveries have ramped up. Her stash is a new, additional allowance
+    // (she has to be fed her own separate reserve now, see `Queen.foodStash`'s doc comment) —
+    // the larder-tile total below is the *same* amount this used to seed in total, before the
+    // queen had a stash of her own, so seeded larvae's feeding runway isn't shortchanged by her
+    // getting a cut of it.
+    this.queen.foodStash = cfg.queenEggFoodCost * 3;
+    let remainingFood = cfg.queenEggFoodCost * 12;
+    for (const tile of this.larderTiles) {
+      if (remainingFood <= 0) break;
+      const amount = Math.min(cfg.foodTileCapacity, remainingFood);
+      tile.fill = amount;
+      remainingFood -= amount;
+    }
 
     const totalDevDays = cfg.eggDurationDays + cfg.larvaDurationDays + cfg.pupaDurationDays;
     const count = Math.round(this.initialPopulation * cfg.seededBroodFraction);
     for (let i = 0; i < count; i++) {
-      const scatter = scale(fromAngle(Math.random() * Math.PI * 2), Math.random() * cfg.mapGridSize * 0.4);
-      const position = add(this.nurseryChamberPosition, scatter);
       // spread uniformly across the whole timeline so eclosions are staggered, not all at once
-      this.brood.push(createSeededBrood(position, Math.random() * totalDevDays, cfg));
+      const brood = createSeededBrood(this.nurseryChamberPosition, Math.random() * totalDevDays, cfg);
+      this.assignBroodToTile(brood); // position gets corrected to the assigned tile/slot below
+      this.brood.push(brood);
     }
   }
 
@@ -382,8 +464,9 @@ export class Simulation {
       }
 
       const isCallow = getLifeStage(ant, this.config) === 'callow';
-      // pale/soft-bodied teneral coloring while callow, full color once mature
-      ant.color = isCallow ? [220, 220, 220] : [255, 255, 255];
+      // pale/soft-bodied teneral coloring while callow, full color once mature; a warm tint while
+      // chewing off a bite (see Ant.chewingUntil) so the pause reads as "eating," not a freeze/bug
+      ant.color = ant.chewingUntil >= 0 ? [255, 205, 90] : isCallow ? [220, 220, 220] : [255, 255, 255];
 
       if (ant.layer === 'underground') {
         this.stepUndergroundAnt(ant);
@@ -423,7 +506,6 @@ export class Simulation {
     const targetVolume = this.undergroundAntCount * this.config.antUndergroundVolumePerAnt;
     this.undergroundGrid.ensureDesignatedFrontier(this.config.antUndergroundDesignationPoolSize, targetVolume);
     this.updateQueenAndBrood();
-    if (this.foodStored > this.config.foodStorageCap) this.foodStored = this.config.foodStorageCap;
     if (dead) this.ants = this.ants.filter((a) => !dead!.has(a));
     if (this.frame % HISTORY_SAMPLE_INTERVAL_FRAMES === 0) this.recordHistorySample();
     this.frame += 1;
@@ -433,9 +515,15 @@ export class Simulation {
    * release any brood it was carrying, land any delivery already counted at the cave, and keep
    * the underground headcount accurate. */
   private settleDeadAnt(ant: Ant): void {
-    if (ant.carriedBrood) ant.carriedBrood.beingCarried = false;
+    if (ant.carriedBrood) {
+      ant.carriedBrood.beingCarried = false;
+      this.vacateBroodTile(ant.carriedBrood); // release its reserved slot rather than orphaning it
+    }
     if (ant.fetchingBrood) ant.fetchingBrood.beingCarried = false; // release the claim so another nurse can take it
-    if (ant.deliveringUnderground && ant.cargo.count > 0) this.foodStored += 1;
+    if (ant.deliveringUnderground && ant.cargo.count > 0) this.depositFoodUnit(ant.position);
+    // died already holding a unit claimed from the larder, mid-carry to the queen — credit it to
+    // her stash rather than losing it, same idea as the delivery cargo above
+    if (ant.carryingFoodForQueen) this.queen.foodStash += 1;
     if (ant.layer === 'underground') {
       this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
     } else {
@@ -479,20 +567,150 @@ export class Simulation {
     if (this.history.length > HISTORY_MAX_SAMPLES) this.history.shift();
   }
 
+  /** The larder tile with the least fill right now (ties broken by array order) — deliveries
+   * target this one so tiles fill up roughly in turn instead of one pile absorbing everything.
+   * Null only if `larderTiles` is somehow empty (shouldn't happen once `setupMapAndNest` runs). */
+  private leastFullFoodTile(): FoodTile | null {
+    let best: FoodTile | null = null;
+    for (const tile of this.larderTiles) {
+      if (!best || tile.fill < best.fill) best = tile;
+    }
+    return best;
+  }
+
+  /** The larder tile with the most fill right now — a queen-feeder drains this one first, the
+   * mirror image of `leastFullFoodTile`, so feeding trips naturally target whichever tile has
+   * the most to spare. */
+  private fullestFoodTile(): FoodTile | null {
+    let best: FoodTile | null = null;
+    for (const tile of this.larderTiles) {
+      if (!best || tile.fill > best.fill) best = tile;
+    }
+    return best;
+  }
+
+  /** The larder tile closest to `position` — used on arrival to recover *which* tile an ant
+   * actually walked to (it committed to one via `leastFullFoodTile` when the trip began), rather
+   * than threading a tile reference/index through the ant's state for the one-frame gap between
+   * departure and arrival. */
+  private nearestFoodTile(position: Vector2): FoodTile | null {
+    let nearest: FoodTile | null = null;
+    let nearestDist = Infinity;
+    for (const tile of this.larderTiles) {
+      const d = distance(position, tile.position);
+      if (d < nearestDist) {
+        nearest = tile;
+        nearestDist = d;
+      }
+    }
+    return nearest;
+  }
+
+  /** Deposits one delivered food unit into whichever tile is at (or nearest) `atPosition`,
+   * clamped to `foodTileCapacity` — the actual write side of a delivery, shared by
+   * `stepUndergroundDelivery` and `settleDeadAnt`'s in-flight-cargo credit. */
+  private depositFoodUnit(atPosition: Vector2): void {
+    const tile = this.nearestFoodTile(atPosition) ?? this.leastFullFoodTile();
+    if (!tile) return;
+    tile.fill = Math.min(this.config.foodTileCapacity, tile.fill + 1);
+  }
+
+  /** Drains `amount` from the larder, fullest tiles first (the mirror of how deliveries fill the
+   * emptiest first) — so a few tiles stay topped up as a buffer instead of every tile being drawn
+   * down equally thin. Used for larva feeding, which (unlike the queen) still draws on the
+   * colony's shared food rather than requiring its own physical feeding trip — see
+   * `SimConfig.larvaFeedRatePerFrame`'s doc comment for why that abstraction stays as-is. */
+  private consumeFood(amount: number): void {
+    let remaining = amount;
+    const byFill = [...this.larderTiles].sort((a, b) => b.fill - a.fill);
+    for (const tile of byFill) {
+      if (remaining <= 0) break;
+      const take = Math.min(tile.fill, remaining);
+      tile.fill -= take;
+      remaining -= take;
+    }
+  }
+
+  /** A nursery tile with room for `stage` — an existing tile already holding that stage with a
+   * free slot, preferred over claiming a fresh empty tile (packs a stage's brood together rather
+   * than spreading it thin across tiles it doesn't need to occupy yet). Null if every tile is
+   * either full or already claimed by a different stage — the hard-cap case: development for
+   * that stage backs up until a slot frees (an eclosion, or another item finishing its own
+   * relocation off a tile). */
+  private findBroodTileFor(stage: BroodStage): BroodTile | null {
+    let emptyTile: BroodTile | null = null;
+    for (const tile of this.nurseryTiles) {
+      if (tile.stage === stage && tile.occupied.includes(false)) return tile;
+      if (tile.stage === null && !emptyTile) emptyTile = tile;
+    }
+    return emptyTile;
+  }
+
+  /** Finds room for `brood` (by its *current* stage) and reserves a slot immediately — before
+   * any carrying happens, so two nurses can never both commit to the same last-open slot. Sets
+   * `tileIndex`/`slotIndex` but deliberately not `position`/`atNursery`: the caller decides
+   * whether to place it immediately (seeding) or only once a carry finishes walking there (see
+   * `assignBroodToTile` vs. `stepFetchBrood`'s arrival branch). */
+  private reserveBroodTileSlot(brood: Brood): BroodTile | null {
+    const tile = this.findBroodTileFor(brood.stage);
+    if (!tile) return null;
+    if (tile.stage === null) tile.stage = brood.stage;
+    const slot = tile.occupied.indexOf(false);
+    tile.occupied[slot] = true;
+    brood.tileIndex = this.nurseryTiles.indexOf(tile);
+    brood.slotIndex = slot;
+    return tile;
+  }
+
+  /** Reserves a tile/slot for `brood` and places it there immediately — for brood that isn't
+   * being physically carried there (colony-init seeding). Returns false (brood left loose,
+   * `tileIndex` stays null) if the nursery has no room for this stage right now. */
+  private assignBroodToTile(brood: Brood): boolean {
+    const tile = this.reserveBroodTileSlot(brood);
+    if (!tile) return false;
+    brood.position = add(tile.position, BROOD_SLOT_OFFSETS[brood.slotIndex!]);
+    brood.atNursery = true;
+    return true;
+  }
+
+  /** Releases `brood`'s current tile/slot reservation, if it has one — called when a brood item
+   * advances stage while already settled (its tile is now the wrong stage for it and needs to be
+   * freed so the nurse pipeline can relocate it), when it ecloses, or when the ant carrying it
+   * dies mid-transport. A tile whose last occupant just left goes back to unclaimed (`stage:
+   * null`), open to whichever stage next needs it. */
+  private vacateBroodTile(brood: Brood): void {
+    if (brood.tileIndex === null || brood.slotIndex === null) return;
+    const tile = this.nurseryTiles[brood.tileIndex];
+    if (tile) {
+      tile.occupied[brood.slotIndex] = false;
+      if (tile.occupied.every((o) => !o)) tile.stage = null;
+    }
+    brood.tileIndex = null;
+    brood.slotIndex = null;
+  }
+
   /** Underground behavior. Modes, checked in order:
-   * 1. Carrying a delivery (`deliveringUnderground`): steer for the larder chamber and deposit
-   *    on arrival — see `beginUndergroundDelivery`.
-   * 2. Carrying brood (`carriedBrood`): steer for the nursery chamber and settle it there on
-   *    arrival — see `stepBroodCarry`. Finishing a carry takes priority over resurfacing.
+   * 1. Carrying a delivery (`deliveringUnderground`): steer for the chosen larder tile and
+   *    deposit on arrival — see `beginUndergroundDelivery`.
+   * 2. Carrying brood (`carriedBrood`): steer for its reserved nursery tile and settle it there
+   *    on arrival — see `stepBroodCarry`. Finishing a carry takes priority over resurfacing.
    * 3. Fetching brood (`fetchingBrood`): walk to a claimed loose brood item, then pick it up and
    *    switch to carrying it — see `tryBecomeNurse`/`stepFetchBrood`.
-   * 4. Already walking out (`headingToSurface`): keep following the route back to the entrance
+   * 4. Carrying food for the queen (`carryingFoodForQueen`): steer for her chamber and, on
+   *    arrival, spend a few frames physically handing it over before it actually reaches her
+   *    stash — see `stepCarryFoodForQueen`.
+   * 5. Fetching food for the queen (`fetchingFoodForQueen`): walk to a claimed larder tile, then
+   *    pick up a unit and switch to carrying it to her — see `tryBecomeQueenFeeder`/
+   *    `stepFetchFoodForQueen`.
+   * 6. Already walking out (`headingToSurface`): keep following the route back to the entrance
    *    and resurface on arrival — see `beginHeadingToSurface`/`stepHeadToExit`.
-   * 5. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry/fetch):
+   * 7. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry/fetch):
    *    start walking back to the entrance rather than resurfacing instantly from wherever the
    *    ant happens to be — ants only ever cross layers by actually reaching the hole.
-   * 6. Loose brood exists: become a nurse and go fetch it (`tryBecomeNurse`).
-   * 7. Otherwise: wander the dug tunnel network, digging out the colony's current designated
+   * 8. Loose brood exists: become a nurse and go fetch it (`tryBecomeNurse`).
+   * 9. The queen needs feeding and the larder has something to give: become a feeder
+   *    (`tryBecomeQueenFeeder`) — lower priority than tending brood.
+   * 10. Otherwise: wander the dug tunnel network, digging out the colony's current designated
    *    site(s) if bumped into (see `UndergroundGrid.ensureDesignatedFrontier`) — no pheromones,
    *    no rest cycle. Ants bumping into a plain, non-designated wall just turn away;
    *    they can't opportunistically eat through arbitrary dirt, only ever the colony's current
@@ -510,6 +728,14 @@ export class Simulation {
       this.stepFetchBrood(ant);
       return;
     }
+    if (ant.carryingFoodForQueen) {
+      this.stepCarryFoodForQueen(ant);
+      return;
+    }
+    if (ant.fetchingFoodForQueen) {
+      this.stepFetchFoodForQueen(ant);
+      return;
+    }
     if (ant.headingToSurface) {
       this.stepHeadToExit(ant);
       return;
@@ -519,6 +745,7 @@ export class Simulation {
       return;
     }
     if (this.tryBecomeNurse(ant)) return; // walks to fetch the brood next frame
+    if (this.tryBecomeQueenFeeder(ant)) return; // walks to fetch food for the queen next frame
 
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
@@ -596,21 +823,22 @@ export class Simulation {
     if (this.followPath(ant, ant.deliveryPath, this.config.antUndergroundSpeed)) {
       ant.cargo.count = 0;
       ant.deliveringUnderground = false;
-      this.foodStored += 1;
+      this.depositFoodUnit(ant.position);
     }
   }
 
-  /** Turns an idle underground ant into a nurse: if any loose brood exists (laid at the queen,
-   * not yet moved to the nursery and not already claimed by another nurse), it claims the nearest
-   * one and starts walking to fetch it. Self-limiting — each brood item is claimed by exactly one
-   * nurse (via `beingCarried`), so the colony fields as many nurses as there is brood to move and
-   * no more, and eggs get relayed to the nursery promptly instead of piling up at the queen.
+  /** Turns an idle underground ant into a nurse: if any loose brood exists (a brand new egg still
+   * at the queen, or an older item whose stage just outgrew its tile and needs relocating — both
+   * are "no tile assignment right now" the same way, see `Brood.tileIndex`'s doc comment) and not
+   * already claimed by another nurse, it claims the nearest one and starts walking to fetch it.
+   * Self-limiting — each brood item is claimed by exactly one nurse (via `beingCarried`), so the
+   * colony fields as many nurses as there is brood to move and no more.
    * Returns true if the ant became a nurse this frame. */
   private tryBecomeNurse(ant: Ant): boolean {
     let nearest: Brood | null = null;
     let nearestDist = Infinity;
     for (const b of this.brood) {
-      if (b.beingCarried || b.atNursery) continue;
+      if (b.beingCarried || b.tileIndex !== null) continue;
       const d = distance(ant.position, b.position);
       if (d < nearestDist) {
         nearest = b;
@@ -627,36 +855,48 @@ export class Simulation {
     return true;
   }
 
-  /** Walks a nurse to the loose brood it claimed, then takes it in its mandibles and switches to
-   * carrying it to the nursery. */
+  /** Walks a nurse to the loose brood it claimed, then takes it in its mandibles and reserves it
+   * a same-stage nursery tile/slot (see `reserveBroodTileSlot`) before setting off to carry it
+   * there. Reserving *before* the carry leg, not on arrival, means two nurses converging on the
+   * same last-open slot can never both land there. If the nursery genuinely has no room for this
+   * stage right now (hard cap), the fetch is abandoned and the item stays loose at its current
+   * spot — it'll be tried again once something frees up. */
   private stepFetchBrood(ant: Ant): void {
     const brood = ant.fetchingBrood!;
-    if (brood.atNursery || !this.brood.includes(brood)) {
+    if (brood.tileIndex !== null || !this.brood.includes(brood)) {
       // it was settled or removed out from under us — abandon and go back to being idle
       ant.fetchingBrood = null;
       ant.fetchPath = [];
       return;
     }
     if (this.followPath(ant, ant.fetchPath, this.config.antUndergroundSpeed)) {
-      ant.carriedBrood = brood;
-      ant.broodCarryPath = this.undergroundGrid.findPath(ant.position, this.nurseryChamberPosition) ?? [];
+      const tile = this.reserveBroodTileSlot(brood);
       ant.fetchingBrood = null;
       ant.fetchPath = [];
+      if (!tile) {
+        brood.beingCarried = false; // no room anywhere right now — leave it loose, try again later
+        return;
+      }
+      ant.carriedBrood = brood;
+      ant.broodCarryPath = this.undergroundGrid.findPath(ant.position, tile.position) ?? [];
     }
   }
 
-  /** Carries `ant.carriedBrood` toward the nursery chamber, dragging its `position` along with
-   * the ant so it visibly travels rather than teleporting on arrival. Settles it into the
-   * nursery (with a little scatter so brood doesn't all stack on one point) once the route is
-   * complete. */
+  /** Carries `ant.carriedBrood` toward the nursery tile it already reserved (see
+   * `stepFetchBrood`), dragging its `position` along with the ant so it visibly travels rather
+   * than teleporting on arrival. Settles it into its reserved slot (a small fixed offset within
+   * the tile, so multiple items on one tile render as distinct individuals — see
+   * `BROOD_SLOT_OFFSETS`) once the route is complete. */
   private stepBroodCarry(ant: Ant): void {
     const brood = ant.carriedBrood!;
     const arrived = this.followPath(ant, ant.broodCarryPath, this.config.antUndergroundSpeed);
     brood.position = { ...ant.position };
 
     if (arrived) {
-      const scatter = scale(fromAngle(Math.random() * Math.PI * 2), Math.random() * this.config.mapGridSize * 0.3);
-      brood.position = add(this.nurseryChamberPosition, scatter);
+      const tile = brood.tileIndex !== null ? this.nurseryTiles[brood.tileIndex] : null;
+      if (tile && brood.slotIndex !== null) {
+        brood.position = add(tile.position, BROOD_SLOT_OFFSETS[brood.slotIndex]);
+      }
       brood.atNursery = true;
       brood.beingCarried = false;
       ant.carriedBrood = null;
@@ -666,8 +906,9 @@ export class Simulation {
 
   /** A cargo-carrying ant reaching the surface cave descends to physically deliver the food
    * underground rather than it vanishing at the surface — see `interactionWithCells`. Cargo is
-   * intentionally *not* cleared yet; it clears on arrival at the larder (see
-   * `stepUndergroundDelivery`), a chamber separate from the queen's — see `seedStarterNest`. */
+   * intentionally *not* cleared yet; it clears on arrival at the chosen larder tile (see
+   * `stepUndergroundDelivery`), committed to now (the emptiest tile at departure time) rather
+   * than re-picked on arrival. */
   private beginUndergroundDelivery(ant: Ant): void {
     ant.maxLeadScore = 0;
     // 'integration' only: trip complete — zero the path-integration accumulator so the next
@@ -677,10 +918,55 @@ export class Simulation {
     ant.layer = 'underground';
     ant.deliveringUnderground = true;
     ant.position = { ...this.cavePosition }; // 1:1 coordinates with the surface entrance
-    ant.deliveryPath = this.undergroundGrid.findPath(ant.position, this.larderPosition) ?? [];
+    const targetTile = this.leastFullFoodTile();
+    ant.deliveryPath = targetTile ? (this.undergroundGrid.findPath(ant.position, targetTile.position) ?? []) : [];
     ant.paused = false;
     ant.undergroundDutyUntil = this.frame + this.randomDutyFrames();
     this.undergroundAntCount++;
+  }
+
+  /** Turns an idle underground ant into a queen-feeder if her stash is running low and any
+   * larder tile has something to give — lower priority than tending brood (see
+   * `stepUndergroundAnt`'s dispatch order). Unlike brood, there's no single scarce item to claim
+   * (a "feed the queen" trip is an ongoing service, not a discrete object), so this deliberately
+   * doesn't gate against multiple ants becoming feeders in the same frame — a little
+   * over-delivery just tops her stash off slightly further, which is harmless. */
+  private tryBecomeQueenFeeder(ant: Ant): boolean {
+    if (this.queen.foodStash >= this.config.queenEggFoodCost) return false;
+    const tile = this.fullestFoodTile();
+    if (!tile || tile.fill <= 0) return false;
+    ant.fetchingFoodForQueen = true;
+    ant.queenFeedFetchPath = this.undergroundGrid.findPath(ant.position, tile.position) ?? [];
+    return true;
+  }
+
+  /** Walks a feeder to the larder tile it's heading for, claims one unit of food from it, then
+   * switches to carrying that unit to the queen. */
+  private stepFetchFoodForQueen(ant: Ant): void {
+    if (this.followPath(ant, ant.queenFeedFetchPath, this.config.antUndergroundSpeed)) {
+      const tile = this.nearestFoodTile(ant.position);
+      if (tile && tile.fill > 0) tile.fill -= 1;
+      ant.fetchingFoodForQueen = false;
+      ant.carryingFoodForQueen = true;
+      ant.queenFeedCarryPath = this.undergroundGrid.findPath(ant.position, this.queenChamberPosition) ?? [];
+    }
+  }
+
+  /** Walks the feeder to the queen, then — once physically there — spends
+   * `antQueenFeedFrames` actually handing the food over before it reaches her `foodStash`, rather
+   * than an instant transfer the moment the ant arrives. Establishes the same "timed action, not
+   * instant" shape as `Ant.chewingUntil`. */
+  private stepCarryFoodForQueen(ant: Ant): void {
+    if (ant.queenFeedUntil >= 0) {
+      if (this.frame < ant.queenFeedUntil) return; // still handing it over
+      this.queen.foodStash += 1;
+      ant.carryingFoodForQueen = false;
+      ant.queenFeedUntil = -1;
+      return;
+    }
+    if (this.followPath(ant, ant.queenFeedCarryPath, this.config.antUndergroundSpeed)) {
+      ant.queenFeedUntil = this.frame + this.config.antQueenFeedFrames;
+    }
   }
 
   /** Duty shift just ended: rather than resurfacing instantly from wherever the ant happens to
@@ -735,8 +1021,11 @@ export class Simulation {
       // refill the pipeline, so eclosions replace losses without over- or under-shooting.
       const target = this.initialPopulation * cfg.populationCapMultiplier;
       const committed = this.ants.length + this.brood.length;
-      if (committed < target && this.foodStored >= cfg.queenEggFoodCost) {
-        this.foodStored -= cfg.queenEggFoodCost;
+      // draws on her own stash, not the colony's shared larder total — she has to actually be
+      // fed (see tryBecomeQueenFeeder) to lay, not just have the colony be food-rich in the
+      // abstract.
+      if (committed < target && this.queen.foodStash >= cfg.queenEggFoodCost) {
+        this.queen.foodStash -= cfg.queenEggFoodCost;
         this.brood.push(createEgg(this.queen.position));
         this.queen.nextEggAttemptFrame = this.frame + randomInRange(cfg.queenEggCooldownFramesRange);
       } else {
@@ -746,16 +1035,26 @@ export class Simulation {
 
     for (let i = this.brood.length - 1; i >= 0; i--) {
       const b = this.brood[i];
+      const oldStage = b.stage;
       advanceBroodAge(b, cfg);
       if (b.stage === 'larva') {
-        this.foodStored -= feedLarva(b, cfg, this.foodStored);
+        this.consumeFood(feedLarva(b, cfg, this.foodStored));
       }
-      if (tryAdvanceBroodStage(b, cfg) && !b.beingCarried) {
+      const readyToEclose = tryAdvanceBroodStage(b, cfg);
+      if (b.stage !== oldStage && b.tileIndex !== null) {
+        // just advanced (egg->larva or larva->pupa) while already settled on a tile — that tile
+        // is now the wrong stage for it. Vacate so `tryBecomeNurse` picks it up and relocates it
+        // to a same-stage tile, same as it would a brand new egg (see `Brood.tileIndex`'s doc
+        // comment) — this is the "ants keep eggs/larvae/pupae on separate tiles" behavior.
+        this.vacateBroodTile(b);
+      }
+      if (readyToEclose && !b.beingCarried) {
         // pupa ready to eclose: remove from brood, spawn a fresh callow worker in its place.
         // Deferred while `beingCarried` — a pupa can cross its eclosion age mid-transport; if we
         // removed it here the carrying ant would keep a dangling reference and visibly haul
         // nothing to the nursery. `tryAdvanceBroodStage` on a ready pupa is idempotent, so it
         // simply ecloses next frame once the nurse drops it.
+        this.vacateBroodTile(b);
         this.brood.splice(i, 1);
         const direction = fromAngle(Math.random() * Math.PI * 2);
         const newAnt = createAnt(cfg, b.position, direction, 0, 'underground');
@@ -824,6 +1123,7 @@ export class Simulation {
     if (beforePosition) ant.homeVector = add(ant.homeVector, sub(ant.position, beforePosition));
     this.interactionWithCells(ant);
     if (ant.layer === 'underground') return; // just descended — the rest of this is surface-only
+    if (ant.chewingUntil >= 0) return; // frozen mid-bite — no communication/avoidance this frame
 
     // 'flow' needs to deposit every frame — a trail only reads as a spatially continuous line
     // if ants lay it densely as they walk, unlike 'legacy'/'gradient''s sparse "check in every
@@ -1277,7 +1577,8 @@ export class Simulation {
       larderPosition: this.larderPosition,
       queen: this.queen,
       brood: this.brood,
-      foodStored: this.foodStored,
+      larderTiles: this.larderTiles,
+      nurseryTiles: this.nurseryTiles,
       initialPopulation: this.initialPopulation,
       undergroundAntCount: this.undergroundAntCount,
       deliveryEmaFast: this.deliveryEmaFast,
@@ -1311,7 +1612,8 @@ export class Simulation {
     this.larderPosition = data.larderPosition;
     this.queen = data.queen;
     this.brood = data.brood;
-    this.foodStored = data.foodStored;
+    this.larderTiles = data.larderTiles;
+    this.nurseryTiles = data.nurseryTiles;
     this.initialPopulation = data.initialPopulation;
     this.undergroundAntCount = data.undergroundAntCount;
     this.deliveryEmaFast = data.deliveryEmaFast;
