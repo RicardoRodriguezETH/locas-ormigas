@@ -242,9 +242,10 @@ export class StatsOverlay {
     ]);
 
     this.drawActivity(activityCounts, sim.ants.length);
-    this.drawSparkline(this.populationCtx, this.populationChart, sim.history.map((s) => s.population), '#3799bb', 0);
-    this.drawSparkline(this.foodCtx, this.foodChart, sim.history.map((s) => s.foodStored), '#4caf7d', 0);
-    this.drawSparkline(this.throttleCtx, this.throttleChart, sim.history.map((s) => s.foragingThrottle), '#e8a33d', 2);
+    const frames = sim.history.map((s) => s.frame);
+    this.drawSparkline(this.populationCtx, this.populationChart, frames, sim.history.map((s) => s.population), '#3799bb', 0);
+    this.drawSparkline(this.foodCtx, this.foodChart, frames, sim.history.map((s) => s.foodStored), '#4caf7d', 0);
+    this.drawSparkline(this.throttleCtx, this.throttleChart, frames, sim.history.map((s) => s.foragingThrottle), '#e8a33d', 2);
     this.drawHistogram(this.ageCtx, this.ageCanvas, ages, (n) => `${n.toFixed(0)}d`);
     this.drawHistogram(this.sizeCtx, this.sizeCanvas, sizes, (n) => `${n.toFixed(1)}mm`);
   }
@@ -303,9 +304,10 @@ export class StatsOverlay {
   }
 
   /** Small trend line for one rolling `Simulation.history` metric, filled beneath the line so
-   * it reads clearly even at this size. `fixed` controls decimal places on the min/max labels
-   * (0 for whole-number counts, 2 for the throttle ratio). */
-  private drawSparkline(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, values: number[], color: string, fixed: number): void {
+   * it reads clearly even at this size, with a real y-axis (value gridlines/ticks) and x-axis
+   * (sample frame ticks) rather than just min/max text in the corners. `fixed` controls decimal
+   * places on the y tick labels (0 for whole-number counts, 2 for the throttle ratio). */
+  private drawSparkline(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frames: number[], values: number[], color: string, fixed: number): void {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (values.length < 2) {
       ctx.fillStyle = '#8b909a';
@@ -318,14 +320,53 @@ export class StatsOverlay {
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min || 1;
-    const padding = 22;
-    const w = canvas.width - padding * 2;
-    const h = canvas.height - padding * 2;
+    const padLeft = 34;
+    const padRight = 8;
+    const padTop = 10;
+    const padBottom = 16;
+    const w = canvas.width - padLeft - padRight;
+    const h = canvas.height - padTop - padBottom;
+    const xAt = (i: number) => padLeft + (i / (values.length - 1)) * w;
+    const yAt = (v: number) => padTop + h - ((v - min) / range) * h;
 
+    ctx.font = '9px sans-serif';
+
+    // y-axis gridlines + value ticks (min / mid / max)
+    ctx.strokeStyle = '#2c3036';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#8b909a';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (const t of [min, min + range / 2, max]) {
+      const y = yAt(t);
+      ctx.beginPath();
+      ctx.moveTo(padLeft, Math.round(y) + 0.5);
+      ctx.lineTo(padLeft + w, Math.round(y) + 0.5);
+      ctx.stroke();
+      ctx.fillText(t.toFixed(fixed), padLeft - 6, y);
+    }
+
+    // x-axis frame ticks (first / middle / last sample)
+    ctx.textBaseline = 'top';
+    const xTickIndices = [...new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])];
+    xTickIndices.forEach((i, n) => {
+      ctx.textAlign = n === 0 ? 'left' : n === xTickIndices.length - 1 ? 'right' : 'center';
+      ctx.fillText(`${frames[i]}`, xAt(i), padTop + h + 4);
+    });
+
+    // axis lines, a bit more visible than the gridlines
+    ctx.strokeStyle = '#8b909a';
+    ctx.beginPath();
+    ctx.moveTo(padLeft + 0.5, padTop);
+    ctx.lineTo(padLeft + 0.5, padTop + h + 0.5);
+    ctx.lineTo(padLeft + w, padTop + h + 0.5);
+    ctx.stroke();
+
+    // the line + area fill itself
     ctx.beginPath();
     values.forEach((v, i) => {
-      const x = padding + (i / (values.length - 1)) * w;
-      const y = padding + h - ((v - min) / range) * h;
+      const x = xAt(i);
+      const y = yAt(v);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -333,22 +374,17 @@ export class StatsOverlay {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    ctx.lineTo(padding + w, padding + h);
-    ctx.lineTo(padding, padding + h);
+    ctx.lineTo(xAt(values.length - 1), padTop + h);
+    ctx.lineTo(xAt(0), padTop + h);
     ctx.closePath();
     ctx.fillStyle = `${color}33`;
     ctx.fill();
-
-    ctx.fillStyle = '#8b909a';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`min ${min.toFixed(fixed)}`, padding, padding + h + 14);
-    ctx.textAlign = 'right';
-    ctx.fillText(`max ${max.toFixed(fixed)}`, padding + w, padding + h + 14);
   }
 
-  /** Generic bucketed histogram, shared by the age and size distributions. */
-  private drawHistogram(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, values: number[], formatUpper: (n: number) => string): void {
+  /** Generic bucketed histogram, shared by the age and size distributions — a real y-axis (count
+   * gridlines/ticks) and x-axis (value ticks, formatted by `formatValue`) rather than just a
+   * "max N" / min-max text in the corners. */
+  private drawHistogram(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, values: number[], formatValue: (n: number) => string): void {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (values.length === 0) return;
 
@@ -360,30 +396,54 @@ export class StatsOverlay {
     }
     const maxCount = Math.max(...counts, 1);
 
-    const padding = 22;
-    const chartW = canvas.width - padding * 2;
-    const chartH = canvas.height - padding * 2;
+    const padLeft = 28;
+    const padRight = 8;
+    const padTop = 10;
+    const padBottom = 16;
+    const chartW = canvas.width - padLeft - padRight;
+    const chartH = canvas.height - padTop - padBottom;
     const slot = chartW / HISTOGRAM_BINS;
 
+    ctx.font = '9px sans-serif';
+
+    // y-axis gridlines + count ticks (0 / mid / max)
+    ctx.strokeStyle = '#2c3036';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#8b909a';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (const t of [0, maxCount / 2, maxCount]) {
+      const y = padTop + chartH - (t / maxCount) * chartH;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, Math.round(y) + 0.5);
+      ctx.lineTo(padLeft + chartW, Math.round(y) + 0.5);
+      ctx.stroke();
+      ctx.fillText(t.toFixed(0), padLeft - 6, y);
+    }
+
+    // bars
     ctx.fillStyle = '#3799bb';
     for (let i = 0; i < HISTOGRAM_BINS; i++) {
       const barHeight = (counts[i] / maxCount) * chartH;
-      ctx.fillRect(padding + i * slot, padding + chartH - barHeight, Math.max(slot - 2, 1), barHeight);
+      ctx.fillRect(padLeft + i * slot, padTop + chartH - barHeight, Math.max(slot - 2, 1), barHeight);
     }
 
+    // axis lines, a bit more visible than the gridlines
     ctx.strokeStyle = '#8b909a';
     ctx.beginPath();
-    ctx.moveTo(padding, padding + chartH + 0.5);
-    ctx.lineTo(padding + chartW, padding + chartH + 0.5);
+    ctx.moveTo(padLeft + 0.5, padTop);
+    ctx.lineTo(padLeft + 0.5, padTop + chartH + 0.5);
+    ctx.lineTo(padLeft + chartW, padTop + chartH + 0.5);
     ctx.stroke();
 
-    ctx.fillStyle = '#8b909a';
-    ctx.font = '10px sans-serif';
+    // x-axis value ticks (0 / mid / upper)
+    ctx.textBaseline = 'top';
     ctx.textAlign = 'left';
-    ctx.fillText('0', padding, padding + chartH + 14);
-    ctx.fillText(`max ${maxCount}`, padding, padding - 8);
+    ctx.fillText(formatValue(0), padLeft, padTop + chartH + 4);
+    ctx.textAlign = 'center';
+    ctx.fillText(formatValue(upper / 2), padLeft + chartW / 2, padTop + chartH + 4);
     ctx.textAlign = 'right';
-    ctx.fillText(formatUpper(upper), padding + chartW, padding + chartH + 14);
+    ctx.fillText(formatValue(upper), padLeft + chartW, padTop + chartH + 4);
   }
 
   /** Runs `runPheromoneBenchmark` (four throwaway headless colonies, one per algorithm — fully
