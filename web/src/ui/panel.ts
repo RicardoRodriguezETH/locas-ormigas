@@ -30,6 +30,7 @@ const ALGORITHMS: Array<{ algorithm: PheromoneAlgorithm; label: string }> = [
   { algorithm: 'gradient', label: 'Gradient' },
   { algorithm: 'flow', label: 'Flow' },
   { algorithm: 'diffusion', label: 'Diffusion' },
+  { algorithm: 'integration', label: 'Integration' },
 ];
 
 export interface PanelCallbacks {

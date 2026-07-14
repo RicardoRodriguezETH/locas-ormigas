@@ -54,8 +54,23 @@ export const GRID_COM_SCAN: ReadonlyArray<readonly [number, number]> = [
  * field is shaped by the passable-cell graph itself. See
  * `Simulation.communicatePheromones`/`communicatePheromonesClassic`/`communicatePheromonesFlow`/
  * `communicatePheromonesDiffusion` and `WorldGrid.diffuseScent`, kept side by side so all five
- * are directly comparable (see also `core/benchmark.ts`). */
-export type PheromoneAlgorithm = 'legacy' | 'legacy+' | 'gradient' | 'flow' | 'diffusion';
+ * are directly comparable (see also `core/benchmark.ts`).
+ *
+ * 'integration' is the odd one out: the other four are all pure trail-following (an ant with no
+ * usable lead just keeps wandering) — 'integration' is the first to also model the *individual*
+ * side of real ant navigation research shows matters just as much as the trail itself. Per a
+ * research pass on *Lasius niger* foraging biology: (1) trail-following at a junction is a
+ * probabilistic choice biased by concentration, not a deterministic snap to the single best
+ * lead — modeled here as the Deneubourg/Beckers/Goss choice function `(k+C)^α`, blended as a
+ * weighted direction rather than winner-take-all; (2) recruitment (laying a trail advertising a
+ * find) is a threshold decision gated by food quality, not automatic — real foragers at richer
+ * sources lay substantially more trail than at poor ones, and a meaningful fraction of trips
+ * never recruit at all; (3) an ant's return trip leans on its own path-integration home vector
+ * (accumulated displacement since it left the nest — real ants dead-reckon home via compass +
+ * odometry, not by re-finding a trail) at least as much as on any trail, which is what lets a
+ * lone or trail-less ant still get home reliably. See
+ * `Simulation.communicatePheromonesIntegration`, `Ant.homeVector`. */
+export type PheromoneAlgorithm = 'legacy' | 'legacy+' | 'gradient' | 'flow' | 'diffusion' | 'integration';
 
 export interface SimConfig {
   numAnts: number;
@@ -333,6 +348,36 @@ export interface SimConfig {
    * physically propagate across the map faster (in simulated time) without changing how often
    * ants themselves re-sample it. */
   diffusionSubstepsPerFrame: number;
+
+  /** 'integration' only: the Deneubourg/Beckers/Goss junction-choice function's baseline
+   * attraction-to-an-unmarked-option constant — `P_i ∝ (k + C_i)^α`. Fitted to Lasius niger and
+   * Argentine-ant double-bridge data at k≈6. Read alongside `integrationAlpha` as weights in a
+   * blended-direction steer rather than a discrete branch pick (see
+   * `Simulation.communicatePheromonesIntegration`). */
+  integrationK: number;
+  /** 'integration' only: same choice function's nonlinearity exponent — α>1 means a branch with
+   * slightly more pheromone gets disproportionately more traffic (the actual engine of trail
+   * selection in the real experiments). Fitted around α≈2 in most double-bridge setups. */
+  integrationAlpha: number;
+  /** 'integration' only: how strongly a cave-seeking ant's heading blends toward its own
+   * path-integration home vector (see `Ant.homeVector`) each communication tick — real ants lean
+   * on this dead-reckoned vector for the return trip at least as much as on any trail, so it's
+   * deliberately blended in on top of (not gated behind absence of) the pheromone trail. */
+  integrationHomeVectorBlend: number;
+  /** 'integration' only: below this accumulated-vector length (world units), the home vector is
+   * too short to have a meaningful direction yet (an ant that just left the nest) — skip steering
+   * by it rather than dividing a near-zero vector into noise. */
+  integrationHomeVectorMinLength: number;
+  /** 'integration' only: baseline probability a trip recruits (lays a 'food' trail) at all once
+   * cargo is picked up, before `integrationRecruitQualityBonus` — real recruitment is an
+   * all-or-none per-trip decision gated by a "desired volume" threshold, not automatic; a
+   * meaningful fraction of trips (measured ~14%) never recruit regardless of food quality. */
+  integrationRecruitBaseProbability: number;
+  /** 'integration' only: added to `integrationRecruitBaseProbability`, scaled by the food's
+   * remaining-nutrients fraction at pickup (`Ant.lastFoodQuality`) — richer/fresher sources
+   * recruit more reliably (measured: 43% more trail marks at the richest vs. poorest sucrose
+   * concentrations tested). */
+  integrationRecruitQualityBonus: number;
   pheromoneAlgorithm: PheromoneAlgorithm;
 }
 
@@ -423,5 +468,13 @@ export const defaultConfig: SimConfig = {
   diffusionDecayPerStep: 0.9997,
   diffusionSourceStrength: 1,
   diffusionSubstepsPerFrame: 3,
+
+  integrationK: 6,
+  integrationAlpha: 2,
+  integrationHomeVectorBlend: 0.3,
+  integrationHomeVectorMinLength: 5,
+  integrationRecruitBaseProbability: 0.5,
+  integrationRecruitQualityBonus: 0.36,
+
   pheromoneAlgorithm: 'gradient',
 };

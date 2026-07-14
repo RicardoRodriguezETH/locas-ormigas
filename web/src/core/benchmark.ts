@@ -18,7 +18,7 @@ export interface BenchmarkOptions {
   onProgress?: (algorithm: PheromoneAlgorithm, framesDone: number, framesTotal: number) => void;
 }
 
-const ALL_ALGORITHMS: PheromoneAlgorithm[] = ['legacy', 'legacy+', 'gradient', 'flow', 'diffusion'];
+const ALL_ALGORITHMS: PheromoneAlgorithm[] = ['legacy', 'legacy+', 'gradient', 'flow', 'diffusion', 'integration'];
 /** How often the frame loop yields back to the event loop — frequent enough that the tab stays
  * responsive and `onProgress` can drive a live progress readout, infrequent enough that yielding
  * itself isn't a meaningful fraction of the benchmark's own runtime. */

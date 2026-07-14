@@ -19,7 +19,7 @@ import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './confi
 import { CaveCell, FoodCell, type FoodType } from './cells';
 import { type PaintableCellType, type SerializedGridCell, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
 import { UndergroundGrid } from './underground';
-import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, type Vector2 } from './vector';
+import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, sub, type Vector2 } from './vector';
 
 export interface SimulationOptions {
   /** Sprinkle a little random grass/rubble across the map on init. Tests usually want this off. */
@@ -670,6 +670,9 @@ export class Simulation {
    * `stepUndergroundDelivery`), a chamber separate from the queen's — see `seedStarterNest`. */
   private beginUndergroundDelivery(ant: Ant): void {
     ant.maxLeadScore = 0;
+    // 'integration' only: trip complete — zero the path-integration accumulator so the next
+    // outbound leg starts fresh (see Ant.homeVector's doc comment).
+    ant.homeVector = { x: 0, y: 0 };
     taskFound(ant, this.config, this.frame); // flips lookingFor/nextTask back to 'food' for when it resurfaces
     ant.layer = 'underground';
     ant.deliveringUnderground = true;
@@ -813,7 +816,12 @@ export class Simulation {
   }
 
   private stepAnt(ant: Ant): void {
+    const beforePosition = this.config.pheromoneAlgorithm === 'integration' ? { ...ant.position } : null;
     this.grid.resolveBlockingCollisionAndMove(ant, this.frame);
+    // 'integration' only: accumulate this frame's actual displacement (post-collision, so it
+    // reflects real steps taken, not intended heading) into the running path-integration vector —
+    // see Ant.homeVector's doc comment.
+    if (beforePosition) ant.homeVector = add(ant.homeVector, sub(ant.position, beforePosition));
     this.interactionWithCells(ant);
     if (ant.layer === 'underground') return; // just descended — the rest of this is surface-only
 
@@ -862,6 +870,13 @@ export class Simulation {
   private communicatePheromones(ant: Ant): void {
     if (this.config.pheromoneAlgorithm === 'legacy') {
       this.communicatePheromonesClassic(ant);
+      return;
+    }
+    if (this.config.pheromoneAlgorithm === 'integration') {
+      // has its own built-in path-integration return-trip steering (Ant.homeVector) — the
+      // small-colony homing/stuck-escape overlays below are a cruder stand-in for exactly this,
+      // so skip them here rather than double-steering the same ant toward home two ways.
+      this.communicatePheromonesIntegration(ant);
       return;
     }
     if (this.config.pheromoneAlgorithm === 'flow') {
@@ -1144,6 +1159,86 @@ export class Simulation {
       if (confidence > 0.3) {
         ant.informedUntil = this.frame + this.config.antInformedWindow;
       }
+    }
+  }
+
+  /** 'integration': the *Lasius niger* foraging-research algorithm — see `PheromoneAlgorithm`'s
+   * doc comment for the biology. Three pieces, layered rather than either/or:
+   *
+   *  1. **Junction choice as a weighted blend, not a snap.** Real trail-following at a junction
+   *     is a probabilistic choice biased by concentration (Deneubourg/Beckers/Goss:
+   *     `P_i ∝ (k+C_i)^α`), not "steer at the single best lead." Modeled here as a weighted
+   *     vector average over the scanned neighborhood, with the ant's *current heading* itself
+   *     entered as a baseline candidate at weight `k^α` (the "attraction to an unmarked option"
+   *     term) — so with no pheromone nearby the average reduces to "keep going," and any real
+   *     lead pulls proportionally harder the stronger (and more super-linearly, since α>1) it is.
+   *  2. **Recruitment is gated and quality-scaled, not automatic.** The 'food' trail (which is
+   *     what recruits new foragers to a source) is only deposited on trips where
+   *     `ant.recruitsThisTrip` came up true — a per-trip threshold roll made at pickup, biased by
+   *     the source's remaining-nutrients fraction (see `FoodCell.affectAnt`). The 'cave' trail
+   *     (finding the way home) isn't gated the same way — that's personal wayfinding, not a
+   *     "recruit others" broadcast. Deposit amount decays with how long ago the ant actually saw
+   *     the resource, which for a homeward-walking ant is also a free, correct reproduction of
+   *     "far more pheromone right next to the food than back near the nest" (Czaczkes et al.
+   *     2024) — no extra distance-tracking needed, it falls out of the existing freshness decay.
+   *  3. **Path integration as an always-on private fallback for the return leg.** A cave-seeking
+   *     ant blends its heading toward its own accumulated `homeVector` (see the field's doc
+   *     comment) regardless of whether a trail exists — real ants lean on dead-reckoning at
+   *     least as much as on the social trail to get home (Grüter, Czaczkes & Ratnieks 2011: route
+   *     memory frequently dominates pheromone once learned), which is what lets this algorithm
+   *     get an ant home reliably even with a thin or nonexistent trail network. */
+  private communicatePheromonesIntegration(ant: Ant): void {
+    const cfg = this.config;
+    const [gx, gy] = this.grid.worldToGrid(ant.position.x, ant.position.y);
+    const field = ant.lookingFor;
+
+    // --- 1. junction choice: weighted blend over (k+C)^α, current heading as the k^α baseline ---
+    const baselineWeight = cfg.integrationK ** cfg.integrationAlpha;
+    let weightedDir = scale(ant.direction, baselineWeight);
+    let bestConcentration = 0;
+    for (const [dx, dy] of GRID_COM_SCAN) {
+      if (dx === 0 && dy === 0) continue;
+      const info = this.grid.get(gx + dx, gy + dy).pheromones[field];
+      const concentration = readPheromoneStrength(info, this.frame, cfg.pheromoneDecayPerFrame);
+      if (concentration <= 0) continue;
+      if (concentration > bestConcentration) bestConcentration = concentration;
+      const weight = (cfg.integrationK + concentration) ** cfg.integrationAlpha;
+      weightedDir = add(weightedDir, scale(normalize({ x: dx, y: dy }, ant.direction), weight));
+    }
+    ant.maxLeadScore = bestConcentration;
+    if (bestConcentration > 0) {
+      const trailDirection = normalize(weightedDir, ant.direction);
+      const b = cfg.pheromoneLeadBlend;
+      ant.direction = normalize(add(scale(ant.direction, 1 - b), scale(trailDirection, b)), ant.direction);
+      ant.informedUntil = this.frame + cfg.antInformedWindow;
+    }
+
+    // --- 2. recruitment: threshold/quality-gated 'food' deposit, unconditional 'cave' deposit ---
+    if (ant.pheromonesWrite) {
+      for (const interest of INTERESTS) {
+        if (interest === 'food' && !ant.recruitsThisTrip) continue;
+        const lastSeen = ant.lastTimeSeen[interest];
+        if (lastSeen < 0) continue;
+        const info = this.grid.get(gx, gy).pheromones[interest];
+        const personalFreshness = cfg.pheromoneDecayPerFrame ** (this.frame - lastSeen);
+        const qualityFactor = interest === 'food' ? ant.lastFoodQuality : 1;
+        const depositAmount = cfg.pheromoneDepositAmount * qualityFactor * personalFreshness;
+        const existingStrength = readPheromoneStrength(info, this.frame, cfg.pheromoneDecayPerFrame);
+        if (depositAmount <= existingStrength) continue; // real ants don't try to overwrite a stronger existing mark
+        info.strength = depositAmount;
+        info.lastUpdated = this.frame;
+        info.where = { ...ant.oldestPositionRemembered };
+      }
+    } else if (this.frame >= ant.pheromonesBackTime) {
+      enablePheromonesWrite(ant);
+    }
+
+    // --- 3. path integration: always-on private fallback for the return leg ---
+    if (field === 'cave' && length(ant.homeVector) > cfg.integrationHomeVectorMinLength) {
+      const homeward = normalize(scale(ant.homeVector, -1), ant.direction);
+      const b = cfg.integrationHomeVectorBlend;
+      ant.direction = normalize(add(scale(ant.direction, 1 - b), scale(homeward, b)), ant.direction);
+      ant.informedUntil = this.frame + cfg.antInformedWindow;
     }
   }
 
