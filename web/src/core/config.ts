@@ -92,6 +92,13 @@ export interface SimConfig {
    * discovery/repair (especially for 'flow', whose whole mechanic depends on continuous
    * exploration keeping the field alive). */
   antErraticSearching: number;
+  /** Chance a wander turn that would repeat the same rotational direction as the previous one
+   * gets flipped to the opposite direction instead — negative turn autocorrelation, matching
+   * real foragers' search paths (measured in Temnothorax: ~78% of ants show a significant
+   * negative autocorrelation in turn direction at ~3 body-lengths). Spreads search out and cuts
+   * down on re-crossing just-searched ground, versus a pure independent random walk. See
+   * `updateAnt`. */
+  antTurnAlternationBias: number;
   /** How long "recently informed" status lasts after last receiving useful pheromone
    * guidance before an ant reverts to searching-style wander. */
   antInformedWindow: number;
@@ -378,6 +385,14 @@ export interface SimConfig {
    * recruit more reliably (measured: 43% more trail marks at the richest vs. poorest sucrose
    * concentrations tested). */
   integrationRecruitQualityBonus: number;
+  /** 'integration' only: decayed recent-traffic count (see `readTraffic`) at which 'food'-trail
+   * reinforcement is suppressed by half — real foragers deposit substantially less when they
+   * encounter many nestmates on the same stretch of trail (measured: a ~5.6x reduction from
+   * least- to most-crowded conditions), which is what lets a colony reallocate to a *less*
+   * crowded, potentially better source instead of permanently over-committing to the first one
+   * found. Deliberately scoped to the 'food' deposit only (the recruitment signal), not 'cave' —
+   * crowding on the way home is just heavy traffic, not a reason to stop finding your way back. */
+  integrationCrowdingHalfSaturation: number;
   pheromoneAlgorithm: PheromoneAlgorithm;
 }
 
@@ -390,6 +405,7 @@ export const defaultConfig: SimConfig = {
   antPositionMemorySize: 10,
   antErraticInformed: 0.08,
   antErraticSearching: 0.2,
+  antTurnAlternationBias: 0.6,
   antInformedWindow: 120,
   antObjectAvoidance: true,
   antObjectAvoidanceFov: Math.PI / 6,
@@ -475,6 +491,7 @@ export const defaultConfig: SimConfig = {
   integrationHomeVectorMinLength: 5,
   integrationRecruitBaseProbability: 0.5,
   integrationRecruitQualityBonus: 0.36,
+  integrationCrowdingHalfSaturation: 8,
 
   pheromoneAlgorithm: 'gradient',
 };

@@ -9,16 +9,19 @@ here as candidate future work rather than implemented now.
 
 ## Individual movement
 
-- **Correlated random walk + negative turn autocorrelation for exploration.** Real search paths
-  aren't pure random walk — turns are small deviations from the previous heading (CRW), plus
-  ~78% of ants show *negative* turn autocorrelation at ~3 body-lengths (a turn one way tends to
-  be followed by a turn the other way), which spreads search out without wandering arbitrarily
-  far. Our current erratic-search wander (`antErraticSearching`) is closer to plain uncorrelated
-  jitter. Could be tuned to actually alternate turn sign for more realistic, better-coverage
-  search paths.
-- **Central-place foraging reset.** Real scouts don't just CRW forever — they periodically reset
-  back toward the nest rather than diffusing arbitrarily far. `antRestTetherRadius` covers this
-  for *resting* ants; foraging ants have no equivalent soft leash.
+- ~~**Correlated random walk + negative turn autocorrelation for exploration.**~~ **Shipped.**
+  `updateAnt` (`src/core/ant.ts`) now biases a wander turn to flip sign when it would otherwise
+  repeat the previous turn's direction (`SimConfig.antTurnAlternationBias`) — applied to every
+  algorithm equally (a shared movement-realism change, not an `'integration'`-specific mechanic),
+  so it doesn't affect cross-algorithm benchmark fairness.
+- **Central-place foraging reset.** Still not modeled. Real scouts don't just CRW forever — they
+  periodically reset back toward the nest rather than diffusing arbitrarily far.
+  `antRestTetherRadius` covers this for *resting* ants; foraging ants have no equivalent soft
+  leash. Deliberately not added: this map is already bounded (ants bounce off the edges) and food
+  sites sit at a fixed, moderate distance from the nest, so an added leash risks actively
+  preventing foragers from ever reaching a real, deliberately-placed food source rather than
+  modeling realistic-but-unbounded-landscape search behavior. Worth revisiting only alongside a
+  much larger map where "wandering too far to ever come back" becomes a real failure mode.
 
 ## Recruitment method scales with colony size
 
@@ -58,11 +61,14 @@ here as candidate future work rather than implemented now.
 
 ## Negative feedback / crowding
 
-- Real foragers reduce trail deposition when they encounter many nestmates on the same trail (a
-  ~5.6× reduction from least- to most-crowded conditions), and prefer unoccupied over occupied
-  feeders. This is what lets a colony reallocate to a better source instead of permanently locking
-  onto the first one found. Not modeled — no per-cell "traffic" signal exists yet to hook this
-  into.
+- ~~Real foragers reduce trail deposition when they encounter many nestmates on the same
+  trail.~~ **Partially shipped.** `GridCellData.traffic` (`src/core/grid.ts`) is now a decaying
+  per-cell passage count, read via `readTraffic`; `'integration'`'s 'food'-trail deposit (the
+  recruitment signal, not the 'cave' wayfinding one) is suppressed by
+  `SimConfig.integrationCrowdingHalfSaturation` as traffic builds up on a stretch of trail. Still
+  not modeled: **preferring unoccupied over occupied feeders** specifically — that would need a
+  discrete "how many ants are at this exact food source right now" concept, which doesn't exist
+  yet (the traffic field is a general per-tile passage count, not per-resource occupancy).
 
 ## Food/colony biology (flavor, not mechanics)
 

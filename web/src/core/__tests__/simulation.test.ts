@@ -252,6 +252,79 @@ describe('Simulation', () => {
     expect(deliveries).toBeGreaterThan(30);
   }, 30000);
 
+  it("'integration' algorithm steers toward a nearby lead via the weighted junction-choice blend", () => {
+    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'integration' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+    const lead = sim.grid.get(1, 0).pheromones.food;
+    lead.strength = 1;
+    lead.lastUpdated = 0;
+
+    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: -1 }); // heading north
+    seeker.speed = 0;
+    seeker.lookingFor = 'food';
+    sim.ants = [seeker];
+    sim.frame = 0;
+    sim.update();
+
+    expect(seeker.maxLeadScore).toBeCloseTo(1);
+    expect(seeker.direction.x).toBeGreaterThan(0); // pulled east, toward the lead cell
+  });
+
+  it("'integration' algorithm: a cave-seeking ant with no trail still steers home via its own path-integration vector", () => {
+    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'integration' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+
+    const seeker = createAnt(localCfg, { x: 8, y: 8 }, { x: 0, y: -1 }); // heading north, no pheromone lead anywhere
+    seeker.speed = 0;
+    seeker.lookingFor = 'cave';
+    seeker.homeVector = { x: 50, y: 0 }; // "I've wandered 50 units east of the nest" -> home is west
+    sim.ants = [seeker];
+    sim.frame = 0;
+    sim.update();
+
+    expect(seeker.direction.x).toBeLessThan(0); // steered west, back toward the nest
+  });
+
+  it("'integration' algorithm: recruitment ('food' trail) is gated by recruitsThisTrip, not automatic", () => {
+    const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'integration' as const };
+
+    const nonRecruiter = createAnt(localCfg, { x: 8, y: 8 }, { x: 1, y: 0 });
+    nonRecruiter.speed = 0;
+    nonRecruiter.lookingFor = 'cave';
+    nonRecruiter.lastTimeSeen.food = 0;
+    nonRecruiter.recruitsThisTrip = false;
+    const sim1 = new Simulation(localCfg, { randomizeGrid: false });
+    sim1.ants = [nonRecruiter];
+    sim1.frame = 0;
+    sim1.update();
+    expect(sim1.grid.get(0, 0).pheromones.food.strength).toBe(0); // never deposited
+
+    const recruiter = createAnt(localCfg, { x: 8, y: 8 }, { x: 1, y: 0 });
+    recruiter.speed = 0;
+    recruiter.lookingFor = 'cave';
+    recruiter.lastTimeSeen.food = 0;
+    recruiter.recruitsThisTrip = true;
+    const sim2 = new Simulation(localCfg, { randomizeGrid: false });
+    sim2.ants = [recruiter];
+    sim2.frame = 0;
+    sim2.update();
+    expect(sim2.grid.get(0, 0).pheromones.food.strength).toBeGreaterThan(0); // deposited
+  });
+
+  it("'integration' algorithm colony delivers food, not fewer than an undirected colony would", () => {
+    vi.restoreAllMocks();
+    const localCfg = { ...defaultConfig, pheromoneAlgorithm: 'integration' as const };
+    const sim = new Simulation(localCfg, { randomizeGrid: false });
+    sim.init(300);
+    const probe = sim as unknown as { deliveriesThisFrame: number };
+    let deliveries = 0;
+    for (let f = 0; f < 10000; f++) {
+      sim.update();
+      deliveries += probe.deliveriesThisFrame ?? 0;
+    }
+    expect(deliveries).toBeGreaterThan(30);
+  }, 30000);
+
   it("legacy algorithm (true original): steers by hard-snapping straight onto the lead, no blend", () => {
     const localCfg = { ...cfg, antComEveryFrame: true, pheromoneAlgorithm: 'legacy' as const };
     const sim = new Simulation(localCfg, { randomizeGrid: false });

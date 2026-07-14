@@ -17,7 +17,7 @@ import {
 import { type Brood, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { CaveCell, FoodCell, type FoodType } from './cells';
-import { type PaintableCellType, type SerializedGridCell, WorldGrid, readPheromoneFlow, readPheromoneStrength } from './grid';
+import { type PaintableCellType, type SerializedGridCell, WorldGrid, readPheromoneFlow, readPheromoneStrength, readTraffic } from './grid';
 import { UndergroundGrid } from './underground';
 import { add, directionTo, distance, fromAngle, length, normalize, rotate, scale, sub, type Vector2 } from './vector';
 
@@ -1181,6 +1181,9 @@ export class Simulation {
    *     the resource, which for a homeward-walking ant is also a free, correct reproduction of
    *     "far more pheromone right next to the food than back near the nest" (Czaczkes et al.
    *     2024) — no extra distance-tracking needed, it falls out of the existing freshness decay.
+   *     It's also suppressed by local crowding (see `SimConfig.integrationCrowdingHalfSaturation`)
+   *     — real foragers deposit substantially less once they've encountered many nestmates on the
+   *     same stretch, which is what stops a colony over-committing to the first source found.
    *  3. **Path integration as an always-on private fallback for the return leg.** A cave-seeking
    *     ant blends its heading toward its own accumulated `homeVector` (see the field's doc
    *     comment) regardless of whether a trail exists — real ants lean on dead-reckoning at
@@ -1214,14 +1217,22 @@ export class Simulation {
     }
 
     // --- 2. recruitment: threshold/quality-gated 'food' deposit, unconditional 'cave' deposit ---
+    // Crowding-based negative feedback: read this cell's recent-traffic level *before* counting
+    // this ant's own passage, so a single ant doesn't suppress its own deposit.
+    const cellData = this.grid.get(gx, gy);
+    const traffic = readTraffic(cellData, this.frame, cfg.pheromoneDecayPerFrame);
+    const crowdingFactor = cfg.integrationCrowdingHalfSaturation / (cfg.integrationCrowdingHalfSaturation + traffic);
+    cellData.traffic = traffic + 1;
+    cellData.trafficLastUpdated = this.frame;
+
     if (ant.pheromonesWrite) {
       for (const interest of INTERESTS) {
         if (interest === 'food' && !ant.recruitsThisTrip) continue;
         const lastSeen = ant.lastTimeSeen[interest];
         if (lastSeen < 0) continue;
-        const info = this.grid.get(gx, gy).pheromones[interest];
+        const info = cellData.pheromones[interest];
         const personalFreshness = cfg.pheromoneDecayPerFrame ** (this.frame - lastSeen);
-        const qualityFactor = interest === 'food' ? ant.lastFoodQuality : 1;
+        const qualityFactor = interest === 'food' ? ant.lastFoodQuality * crowdingFactor : 1;
         const depositAmount = cfg.pheromoneDepositAmount * qualityFactor * personalFreshness;
         const existingStrength = readPheromoneStrength(info, this.frame, cfg.pheromoneDecayPerFrame);
         if (depositAmount <= existingStrength) continue; // real ants don't try to overwrite a stronger existing mark
