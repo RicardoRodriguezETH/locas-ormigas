@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { runPheromoneBenchmark } from '../benchmark';
 
-const ALL_ALGORITHMS = ['legacy', 'legacy+', 'gradient', 'flow', 'diffusion'];
+const ALL_ALGORITHMS = ['legacy', 'legacy+', 'gradient', 'flow', 'diffusion', 'integration'];
 
 describe('runPheromoneBenchmark', () => {
-  it('runs all five algorithms and reports a delivery count for each', async () => {
+  it('runs all six algorithms and reports a delivery count for each', async () => {
     const results = await runPheromoneBenchmark({ frames: 50, antCount: 20 });
 
     expect(results.map((r) => r.algorithm)).toEqual(ALL_ALGORITHMS);

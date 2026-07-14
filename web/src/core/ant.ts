@@ -45,6 +45,24 @@ export interface Ant {
   color: readonly [number, number, number];
   lastCollisionTime: number;
 
+  /** 'integration' algorithm only: running path-integration vector — accumulated displacement
+   * since this ant last departed the cave (zeroed on arrival there, see `CaveCell.affectAnt`),
+   * updated every surface frame in `Simulation.stepAnt`. Real ants derive their "home vector"
+   * this way (odometry + compass), not by knowing their absolute position on a map; negating it
+   * always points back toward the nest without retracing the outbound path. */
+  homeVector: Vector2;
+  /** 'integration' algorithm only: remaining-nutrients fraction of the food source this ant last
+   * picked up from (1 = fresh/full, 0 = picked clean) — a proxy for "food quality/richness" real
+   * foragers can sense and that drives how reliably/heavily they recruit. Set in
+   * `FoodCell.affectAnt`; always 1 for non-perishable ('testing' mode) food. */
+  lastFoodQuality: number;
+  /** 'integration' algorithm only: whether *this* trip recruits — lays a 'food' trail advertising
+   * the find — rolled once per pickup in `FoodCell.affectAnt` (see
+   * `SimConfig.integrationRecruitBaseProbability`/`integrationRecruitQualityBonus`). Real
+   * recruitment is an all-or-none per-trip decision gated by a "desired volume" threshold, not
+   * automatic — a meaningful fraction of trips never recruit regardless of food quality. */
+  recruitsThisTrip: boolean;
+
   /** Pheromone trail: false while an ant is "fresh from a task" and hasn't walked far enough
    * to lay a meaningful trail again. */
   pheromonesWrite: boolean;
@@ -67,6 +85,12 @@ export interface Ant {
   /** Frame cadence on which this ant checks/shares pheromone info (staggered per-ant). */
   comEvery: number;
   comEveryOffset: number;
+
+  /** Small colonies only (see `SimConfig.antStuckCheckFrames`) — position/frame this ant was last
+   * checked for making forward progress, and given a fresh random heading if it wasn't. See
+   * `Simulation.applySmallColonyStuckEscape`. */
+  stuckCheckPosition: Vector2;
+  stuckCheckFrame: number;
 
   /** Which overlay this ant currently lives/acts on. */
   layer: AntLayer;
@@ -176,6 +200,10 @@ export function createAnt(
     color: [255, 255, 255],
     lastCollisionTime: -1,
 
+    homeVector: { x: 0, y: 0 },
+    lastFoodQuality: 1,
+    recruitsThisTrip: true,
+
     pheromonesWrite: true,
     pheromonesBackTime: -1,
 
@@ -192,6 +220,9 @@ export function createAnt(
 
     comEvery: cfg.antComNeedFrameStep[0] + Math.floor(Math.random() * (cfg.antComNeedFrameStep[1] - cfg.antComNeedFrameStep[0] + 1)),
     comEveryOffset: Math.floor(Math.random() * cfg.antComNeedFrameStep[1]) + 1,
+
+    stuckCheckPosition: { ...position },
+    stuckCheckFrame: 0,
 
     size: cfg.antSizeRangeMm[0] + Math.random() * (cfg.antSizeRangeMm[1] - cfg.antSizeRangeMm[0]),
     ageDays: initialAgeDays,

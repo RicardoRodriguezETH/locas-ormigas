@@ -54,8 +54,23 @@ export const GRID_COM_SCAN: ReadonlyArray<readonly [number, number]> = [
  * field is shaped by the passable-cell graph itself. See
  * `Simulation.communicatePheromones`/`communicatePheromonesClassic`/`communicatePheromonesFlow`/
  * `communicatePheromonesDiffusion` and `WorldGrid.diffuseScent`, kept side by side so all five
- * are directly comparable (see also `core/benchmark.ts`). */
-export type PheromoneAlgorithm = 'legacy' | 'legacy+' | 'gradient' | 'flow' | 'diffusion';
+ * are directly comparable (see also `core/benchmark.ts`).
+ *
+ * 'integration' is the odd one out: the other four are all pure trail-following (an ant with no
+ * usable lead just keeps wandering) — 'integration' is the first to also model the *individual*
+ * side of real ant navigation research shows matters just as much as the trail itself. Per a
+ * research pass on *Lasius niger* foraging biology: (1) trail-following at a junction is a
+ * probabilistic choice biased by concentration, not a deterministic snap to the single best
+ * lead — modeled here as the Deneubourg/Beckers/Goss choice function `(k+C)^α`, blended as a
+ * weighted direction rather than winner-take-all; (2) recruitment (laying a trail advertising a
+ * find) is a threshold decision gated by food quality, not automatic — real foragers at richer
+ * sources lay substantially more trail than at poor ones, and a meaningful fraction of trips
+ * never recruit at all; (3) an ant's return trip leans on its own path-integration home vector
+ * (accumulated displacement since it left the nest — real ants dead-reckon home via compass +
+ * odometry, not by re-finding a trail) at least as much as on any trail, which is what lets a
+ * lone or trail-less ant still get home reliably. See
+ * `Simulation.communicatePheromonesIntegration`, `Ant.homeVector`. */
+export type PheromoneAlgorithm = 'legacy' | 'legacy+' | 'gradient' | 'flow' | 'diffusion' | 'integration';
 
 export interface SimConfig {
   numAnts: number;
@@ -123,6 +138,58 @@ export interface SimConfig {
   antRestSpeed: number;
   /** Heading jitter while milling at rest. */
   antRestErratic: number;
+  /** At or below this many total ants, the whole rest/idle activity cycle is suppressed — every
+   * ant forages continuously, and anyone already resting is woken immediately — regardless of
+   * `antInitialActiveFraction`/timers/recruitment. All of the above (mostly-resting start,
+   * timer-gated wake-up) was tuned for an *established* colony with a large surplus workforce,
+   * where a resting majority is realistic and harmless. A small founding colony (see
+   * `Simulation.initGameplay`) has no surplus: measured empirically, a 5-ant colony left to the
+   * normal cycle went 200,000 frames (~55 real minutes at 60fps) completing 3 deliveries and
+   * laying zero eggs — not slow, genuinely stalled, since on average as few as 0-1 of its 5 ants
+   * were ever active foragers at once. This is the fix: below the threshold, the highest-priority
+   * job for every ant is simply "forage," full stop, same idea as real colonies putting nearly
+   * the entire workforce on foraging duty during a founding/famine phase rather than maintaining
+   * a leisure class they can't yet afford. See `Simulation.update`'s `smallColony` check. */
+  antSmallColonyThreshold: number;
+  /** Small colonies only (see `antSmallColonyThreshold`): how strongly a cargo-carrying ant's
+   * heading blends toward the literal, always-known cave position every communication tick,
+   * layered on top of whatever the active pheromone algorithm already steered it toward. Fixes a
+   * second, more fundamental gap the threshold above doesn't touch: every algorithm here leaves
+   * `ant.direction` completely unchanged when it finds no usable lead at the ant's current cell
+   * (see e.g. `communicatePheromonesScored`'s `if (bestWhere)` guard) — fine for an established
+   * colony with hundreds of ants constantly refreshing trails everywhere, but with only a
+   * handful of ants spread across a large map, a laden ant that wanders off the one thin trail
+   * has *nothing* pulling it home and just wanders forever. Measured empirically: even after
+   * fixing the rest-cycle stall above, a 5-ant colony still delivered only 3 loads in 100,000
+   * frames, with most ants sitting motionless (in net displacement) at `cargo=1` for tens of
+   * thousands of frames straight. Real ants solve this with path integration — dead-reckoning
+   * home via internal odometry and a celestial compass — which this sim otherwise doesn't model
+   * for the return trip at all; this is a deliberately crude stand-in for that, kept weak (a
+   * gentle per-tick nudge, not a hard snap) so it reads as "eventually finds its way back"
+   * rather than "beelines home like it has GPS." Applied only when `lookingFor === 'cave'` (a
+   * real ant has no equivalent prior knowledge of undiscovered food, so outbound search stays
+   * untouched) and never for the 'legacy' algorithm (a deliberately unfixed historical baseline,
+   * see `communicatePheromonesClassic`'s doc comment) or outside `gameMode === 'gameplay'`'s
+   * small colonies, so the pheromone-algorithm benchmark keeps comparing each algorithm's own
+   * trail-following rather than a shared homing cheat. See `Simulation.applySmallColonyHoming`. */
+  antSmallColonyHomingBlend: number;
+  /** Small colonies only (see `antSmallColonyThreshold`), gameplay mode only, same non-'legacy'
+   * scoping as `antSmallColonyHomingBlend`: an ant is "stuck" if it hasn't net-moved at least
+   * `antStuckCheckDistance` world units in the last `antStuckCheckFrames` — checked once per
+   * that window, not continuously. Fixes a failure mode the homing blend above can't: it's
+   * deliberately gated off wherever there's no straight line to the cave (so it never pulls an
+   * ant *into* a wall), but that leaves it inert for an ant genuinely trapped bouncing in a
+   * pocket's walled corner — measured empirically, a single ant can get wedged there, moving at
+   * full speed every frame yet net-stuck in an ~10-unit box, for 40,000+ frames straight (real
+   * ants facing this — antennae/legs jammed against an obstacle with no clear sensory gradient to
+   * follow — reorient with a fresh, more drastic search heading rather than endlessly repeating
+   * whatever nudged them into the corner in the first place; this is that same "give up and try
+   * a new direction" behavior). When triggered, the ant's heading is replaced outright (not
+   * blended) with a fresh random direction — anything gentler just re-enters the same collision
+   * pattern that trapped it. See `Simulation.applySmallColonyStuckEscape`. */
+  antStuckCheckFrames: number;
+  /** See `antStuckCheckFrames`. */
+  antStuckCheckDistance: number;
 
   /** Colony-level foraging throttle: real harvester ant colonies adjust how many foragers they
    * send out based on recent forager *return* rate relative to their own baseline — a burst of
@@ -281,6 +348,36 @@ export interface SimConfig {
    * physically propagate across the map faster (in simulated time) without changing how often
    * ants themselves re-sample it. */
   diffusionSubstepsPerFrame: number;
+
+  /** 'integration' only: the Deneubourg/Beckers/Goss junction-choice function's baseline
+   * attraction-to-an-unmarked-option constant — `P_i ∝ (k + C_i)^α`. Fitted to Lasius niger and
+   * Argentine-ant double-bridge data at k≈6. Read alongside `integrationAlpha` as weights in a
+   * blended-direction steer rather than a discrete branch pick (see
+   * `Simulation.communicatePheromonesIntegration`). */
+  integrationK: number;
+  /** 'integration' only: same choice function's nonlinearity exponent — α>1 means a branch with
+   * slightly more pheromone gets disproportionately more traffic (the actual engine of trail
+   * selection in the real experiments). Fitted around α≈2 in most double-bridge setups. */
+  integrationAlpha: number;
+  /** 'integration' only: how strongly a cave-seeking ant's heading blends toward its own
+   * path-integration home vector (see `Ant.homeVector`) each communication tick — real ants lean
+   * on this dead-reckoned vector for the return trip at least as much as on any trail, so it's
+   * deliberately blended in on top of (not gated behind absence of) the pheromone trail. */
+  integrationHomeVectorBlend: number;
+  /** 'integration' only: below this accumulated-vector length (world units), the home vector is
+   * too short to have a meaningful direction yet (an ant that just left the nest) — skip steering
+   * by it rather than dividing a near-zero vector into noise. */
+  integrationHomeVectorMinLength: number;
+  /** 'integration' only: baseline probability a trip recruits (lays a 'food' trail) at all once
+   * cargo is picked up, before `integrationRecruitQualityBonus` — real recruitment is an
+   * all-or-none per-trip decision gated by a "desired volume" threshold, not automatic; a
+   * meaningful fraction of trips (measured ~14%) never recruit regardless of food quality. */
+  integrationRecruitBaseProbability: number;
+  /** 'integration' only: added to `integrationRecruitBaseProbability`, scaled by the food's
+   * remaining-nutrients fraction at pickup (`Ant.lastFoodQuality`) — richer/fresher sources
+   * recruit more reliably (measured: 43% more trail marks at the richest vs. poorest sucrose
+   * concentrations tested). */
+  integrationRecruitQualityBonus: number;
   pheromoneAlgorithm: PheromoneAlgorithm;
 }
 
@@ -305,6 +402,10 @@ export const defaultConfig: SimConfig = {
   antRestTetherRadius: 60,
   antRestSpeed: 0.2,
   antRestErratic: 0.35,
+  antSmallColonyThreshold: 20,
+  antSmallColonyHomingBlend: 0.15,
+  antStuckCheckFrames: 1200,
+  antStuckCheckDistance: 60,
 
   // half-life ~23 frames (recent conditions) vs ~693 frames (long-run baseline)
   antForagingThrottleFastDecay: 0.97,
@@ -367,5 +468,13 @@ export const defaultConfig: SimConfig = {
   diffusionDecayPerStep: 0.9997,
   diffusionSourceStrength: 1,
   diffusionSubstepsPerFrame: 3,
+
+  integrationK: 6,
+  integrationAlpha: 2,
+  integrationHomeVectorBlend: 0.3,
+  integrationHomeVectorMinLength: 5,
+  integrationRecruitBaseProbability: 0.5,
+  integrationRecruitQualityBonus: 0.36,
+
   pheromoneAlgorithm: 'gradient',
 };

@@ -9,6 +9,7 @@ const ALGORITHM_LABELS: Record<PheromoneAlgorithm, string> = {
   gradient: 'Gradient',
   flow: 'Flow',
   diffusion: 'Diffusion',
+  integration: 'Integration',
 };
 
 /** Reuses the history/activity charts' existing palette rather than inventing a new color
@@ -19,6 +20,7 @@ const ALGORITHM_COLORS: Record<PheromoneAlgorithm, string> = {
   gradient: '#3799bb',
   flow: '#4caf7d',
   diffusion: '#e8a33d',
+  integration: '#d65f5f',
 };
 
 const HISTOGRAM_BINS = 12;

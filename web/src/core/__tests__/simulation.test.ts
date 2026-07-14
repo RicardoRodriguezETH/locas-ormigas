@@ -623,8 +623,8 @@ describe('Simulation', () => {
       expect(sim.brood).toHaveLength(0);
       expect(sim.grid.foodIsFinite).toBe(true);
 
-      // one of Simulation's FOOD_SITES ({xg:11, yg:-9}), grid coords relative to the cave at (-6,-4)
-      const foodCell = sim.grid.get(-6 + 11, -4 - 9).cell as FoodCell;
+      // one of Simulation's FOOD_SITES_GAMEPLAY ({xg:6, yg:-5}), grid coords relative to the cave at (-6,-4)
+      const foodCell = sim.grid.get(-6 + 6, -4 - 5).cell as FoodCell;
       expect(foodCell.perishable).toBe(true);
     });
 
@@ -677,5 +677,94 @@ describe('Simulation', () => {
       // the restored simulation is actually alive, not just a static snapshot
       expect(() => restored.update()).not.toThrow();
     }, 30000);
+  });
+
+  describe('small-colony sustainability fixes', () => {
+    it('suppresses the rest/idle cycle at or below antSmallColonyThreshold, unlike a larger colony under the same settings', () => {
+      // antInitialActiveFraction: 0 would normally pause every ant (Math.random() is mocked to
+      // 0.5, so `Math.random() >= 0` is always true) — the small-colony override forces them
+      // all awake anyway; a colony one ant over the threshold gets the normal behavior.
+      const localCfg = { ...defaultConfig, antInitialActiveFraction: 0, antSmallColonyThreshold: 20 };
+
+      const small = new Simulation(localCfg, { randomizeGrid: false });
+      small.init(20);
+      for (let f = 0; f < 10; f++) small.update();
+      expect(small.ants.some((a) => a.paused)).toBe(false);
+
+      const large = new Simulation(localCfg, { randomizeGrid: false });
+      large.init(21);
+      for (let f = 0; f < 10; f++) large.update();
+      expect(large.ants.some((a) => a.paused)).toBe(true);
+    });
+
+    it('gameplay mode homing: blends a cargo-carrying ant\'s heading toward the cave when there\'s a clear line of sight and no pheromone lead', () => {
+      const localCfg = { ...defaultConfig, antComEveryFrame: true, antSmallColonyHomingBlend: 0.3 };
+      const sim = new Simulation(localCfg, { randomizeGrid: false });
+      sim.gameMode = 'gameplay';
+      sim.cavePosition = { x: 0, y: 0 };
+
+      const ant = createAnt(localCfg, { x: 200, y: 0 }, { x: 0, y: 1 });
+      ant.cargo = { count: 1, capacity: 1 };
+      ant.lookingFor = 'cave';
+      sim.ants = [ant];
+
+      sim.update();
+
+      // nudged from (0,1) toward (-1,0) (the direction back to the cave) — not snapped onto it
+      expect(ant.direction.x).toBeLessThan(0);
+      expect(ant.direction.y).toBeGreaterThan(0);
+    });
+
+    it("gameplay mode homing stays inert when the straight line to the cave is blocked, so it never pulls an ant into a wall (e.g. a food pocket's near side)", () => {
+      const localCfg = { ...defaultConfig, antComEveryFrame: true, antSmallColonyHomingBlend: 0.3 };
+      const sim = new Simulation(localCfg, { randomizeGrid: false });
+      sim.gameMode = 'gameplay';
+      sim.cavePosition = { x: 0, y: 0 };
+      // wall off a stretch of the straight line between the ant and the cave
+      for (let xg = 3; xg <= 8; xg++) sim.grid.get(xg, 0).pass = false;
+
+      const ant = createAnt(localCfg, { x: 200, y: 0 }, { x: 0, y: 1 });
+      ant.cargo = { count: 1, capacity: 1 };
+      ant.lookingFor = 'cave';
+      sim.ants = [ant];
+
+      sim.update();
+
+      expect(ant.direction).toEqual({ x: 0, y: 1 }); // untouched: no lead, and homing gated off
+    });
+
+    it('never applies the small-colony homing fallback outside gameplay mode, keeping the pheromone-algorithm benchmark fair even at a low testing-mode ant count', () => {
+      const localCfg = { ...defaultConfig, antComEveryFrame: true, antSmallColonyHomingBlend: 0.3 };
+      const sim = new Simulation(localCfg, { randomizeGrid: false });
+      // gameMode defaults to 'testing' — deliberately not calling initGameplay
+      sim.cavePosition = { x: 0, y: 0 };
+
+      const ant = createAnt(localCfg, { x: 200, y: 0 }, { x: 0, y: 1 });
+      ant.cargo = { count: 1, capacity: 1 };
+      ant.lookingFor = 'cave';
+      sim.ants = [ant];
+
+      sim.update();
+
+      expect(ant.direction).toEqual({ x: 0, y: 1 });
+    });
+
+    it('gameplay mode stuck-escape: forces a fresh heading once an ant has gone antStuckCheckFrames without net progress', () => {
+      const localCfg = { ...defaultConfig, antMaxSpeed: 0, antStuckCheckFrames: 3, antStuckCheckDistance: 1 };
+      const sim = new Simulation(localCfg, { randomizeGrid: false });
+      sim.gameMode = 'gameplay';
+      sim.cavePosition = { x: 0, y: 0 };
+
+      const ant = createAnt(localCfg, { x: 50, y: 50 }, { x: 1, y: 0 });
+      sim.ants = [ant];
+
+      for (let f = 0; f < 3; f++) sim.update();
+      expect(ant.direction).toEqual({ x: 1, y: 0 }); // not yet due for a check
+
+      sim.update();
+      // Math.random() mocked to 0.5 -> fromAngle(0.5 * 2π) = fromAngle(π) = (-1, ~0)
+      expect(ant.direction.x).toBeCloseTo(-1, 5);
+      expect(ant.direction.y).toBeCloseTo(0, 5);
+    });
   });
 });

@@ -74,6 +74,12 @@ export class FoodCell implements Cell {
     // 'legacy' faithfully never resets this (see Simulation.communicatePheromonesClassic) — every
     // other algorithm resets it because a fresh goal deserves to be receptive to any lead again.
     if (ctx.config.pheromoneAlgorithm !== 'legacy') ant.maxLeadScore = 0;
+    // 'integration' only (harmless bookkeeping otherwise): "desired volume" recruitment is an
+    // all-or-none per-trip decision biased by food quality, not automatic — see
+    // SimConfig.integrationRecruitBaseProbability/integrationRecruitQualityBonus.
+    ant.lastFoodQuality = this.nutrientsMax > 0 ? this.nutrients / this.nutrientsMax : 1;
+    const recruitProbability = ctx.config.integrationRecruitBaseProbability + ctx.config.integrationRecruitQualityBonus * ant.lastFoodQuality;
+    ant.recruitsThisTrip = Math.random() < recruitProbability;
     taskFound(ant, ctx.config, ctx.frame);
     if (this.perishable) this.nutrients -= 1;
   }
