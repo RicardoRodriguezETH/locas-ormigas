@@ -28,6 +28,12 @@ export interface Ant {
   lookingFor: Interest;
   nextTask: Interest;
   cargo: Cargo;
+  /** Frame this ant's current bite of food finishes chewing, or -1 while not chewing. Reaching a
+   * food cell no longer picks it up instantly — see `FoodCell.affectAnt`, `SimConfig
+   * .antFoodChewFrames`'s doc comment. The ant is fully frozen while this is set (see `updateAnt`,
+   * `Simulation.stepAnt`): this establishes the "actions take a timer, not an instant transfer"
+   * shape later timed actions (e.g. feeding the queen) also follow. */
+  chewingUntil: number;
 
   /** Frame each interest was last personally observed; -1 means never. Also gates what this
    * ant is willing to deposit pheromone about. */
@@ -135,6 +141,22 @@ export interface Ant {
   /** Remaining waypoints to the claimed `fetchingBrood`, mirroring `broodCarryPath`. */
   fetchPath: Vector2[];
 
+  /** True while walking *to* a larder tile to collect a unit of food for the queen — see
+   * `Simulation.tryBecomeQueenFeeder`. Mirrors the `fetchingBrood`/`carriedBrood` shape: fetch
+   * leg, then carry leg (`carryingFoodForQueen`). */
+  fetchingFoodForQueen: boolean;
+  /** Remaining waypoints to the chosen larder tile, mirroring `fetchPath`. */
+  queenFeedFetchPath: Vector2[];
+  /** True while walking a collected unit of food *from* the larder tile *to* the queen, or
+   * waiting out the feeding hand-off itself once arrived (see `queenFeedUntil`). */
+  carryingFoodForQueen: boolean;
+  /** Remaining waypoints to the queen's chamber, mirroring `broodCarryPath`. */
+  queenFeedCarryPath: Vector2[];
+  /** Frame the feeding hand-off itself completes, once the ant has physically reached the
+   * queen, or -1 before then/while not feeding her — the actual transfer takes a few seconds,
+   * not an instant hand-off, same shape as `chewingUntil`. See `SimConfig.antQueenFeedFrames`. */
+  queenFeedUntil: number;
+
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
   size: number;
@@ -190,9 +212,16 @@ export function createAnt(
     fetchingBrood: null,
     fetchPath: [],
 
+    fetchingFoodForQueen: false,
+    queenFeedFetchPath: [],
+    carryingFoodForQueen: false,
+    queenFeedCarryPath: [],
+    queenFeedUntil: -1,
+
     lookingFor: 'food',
     nextTask: 'cave',
     cargo: { count: 0, capacity: 1 },
+    chewingUntil: -1,
 
     lastTimeSeen: { food: -1, cave: -1 },
     // 0, not -1: the scored-pheromone gate is `score > maxLeadScore`, and an untouched cell
@@ -350,7 +379,7 @@ export function isComNeeded(ant: Ant, frame: number): boolean {
 export function updateAnt(ant: Ant, cfg: SimConfig, frame: number): void {
   storePosition(ant, ant.position);
 
-  if (ant.paused) return;
+  if (ant.paused || ant.chewingUntil >= 0) return;
 
   ant.speed = (ant.speed + ant.acceleration) * ant.friction;
   if (ant.speed > ant.maxSpeed) ant.speed = ant.maxSpeed;

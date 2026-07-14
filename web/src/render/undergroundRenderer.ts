@@ -26,7 +26,11 @@ export class UndergroundRenderer {
   private readonly broodContainer = new Container();
   private readonly antContainer = new Container();
   private readonly queenSprite: Sprite;
-  private readonly larderPileSprite: Sprite;
+  /** One pile sprite per larder tile (see `SimConfig.foodTileCapacity`'s doc comment) — discrete
+   * storage slots, not one shared number, so several piles fill up in view rather than one blob
+   * absorbing every delivery. Built once from `sim.larderTiles`, which doesn't change shape after
+   * `setupMapAndNest` (a mode switch tears down and rebuilds this whole renderer anyway). */
+  private readonly larderPileSprites: Sprite[] = [];
 
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly antSprites = new Map<Ant, Sprite>();
@@ -51,7 +55,7 @@ export class UndergroundRenderer {
     this.buildGroundTiles();
     this.buildEntranceMarker();
     this.queenSprite = this.buildQueenSprite();
-    this.larderPileSprite = this.buildLarderPile();
+    this.buildLarderPiles();
   }
 
   set visible(value: boolean) {
@@ -104,17 +108,19 @@ export class UndergroundRenderer {
     return sprite;
   }
 
-  /** A visible pile at the larder chamber that grows with `foodStored` — otherwise the colony's
-   * food store is an invisible number with no chamber of its own to look at, and delivering
-   * ants would read as endlessly feeding the queen directly (see `syncLarder`). */
-  private buildLarderPile(): Sprite {
-    const sprite = new Sprite(this.textures.food);
-    sprite.anchor.set(0.5);
-    sprite.x = this.sim.larderPosition.x;
-    sprite.y = this.sim.larderPosition.y;
-    sprite.scale.set(0);
-    this.cellContainer.addChild(sprite);
-    return sprite;
+  /** One visible pile per larder tile, each growing with that tile's own fill — otherwise the
+   * colony's food store is an invisible number with no chamber of its own to look at, and
+   * delivering ants would read as endlessly feeding the queen directly (see `syncLarder`). */
+  private buildLarderPiles(): void {
+    for (const tile of this.sim.larderTiles) {
+      const sprite = new Sprite(this.textures.food);
+      sprite.anchor.set(0.5);
+      sprite.x = tile.position.x;
+      sprite.y = tile.position.y;
+      sprite.scale.set(0);
+      this.cellContainer.addChild(sprite);
+      this.larderPileSprites.push(sprite);
+    }
   }
 
   private createAntSprite(ant: Ant): Sprite {
@@ -182,13 +188,17 @@ export class UndergroundRenderer {
     this.queenSprite.y = this.sim.queen.position.y;
   }
 
-  /** Grows the larder pile with `foodStored` (square-root so early deliveries are still
-   * visible rather than the pile staying invisibly tiny for a long warm-up period), capped at
-   * a bit larger than one tile so it doesn't overrun the chamber. */
+  /** Grows each tile's own pile with its own fill level (linear is fine here — unlike the old
+   * single shared pile, a tile's cap, `foodTileCapacity`, is small enough that even one or two
+   * delivered units read as visible progress without needing a square-root curve). */
   private syncLarder(): void {
-    const { foodStored } = this.sim;
-    const growth = Math.min(1, Math.sqrt(foodStored) / Math.sqrt(150));
-    this.larderPileSprite.scale.set(foodStored > 0.01 ? IMG_SCALE * (0.15 + growth * 0.85) : 0);
+    const { larderTiles, config } = this.sim;
+    for (let i = 0; i < larderTiles.length; i++) {
+      const tile = larderTiles[i];
+      const sprite = this.larderPileSprites[i];
+      const growth = Math.min(1, tile.fill / config.foodTileCapacity);
+      sprite.scale.set(tile.fill > 0.01 ? IMG_SCALE * (0.15 + growth * 0.85) : 0);
+    }
   }
 
   private createBroodSprite(): Sprite {
