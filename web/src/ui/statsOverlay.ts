@@ -61,6 +61,8 @@ export class StatsOverlay {
   private readonly foodCtx: CanvasRenderingContext2D;
   private readonly throttleChart: HTMLCanvasElement;
   private readonly throttleCtx: CanvasRenderingContext2D;
+  private readonly broodChart: HTMLCanvasElement;
+  private readonly broodCtx: CanvasRenderingContext2D;
 
   private readonly ageCanvas: HTMLCanvasElement;
   private readonly ageCtx: CanvasRenderingContext2D;
@@ -92,7 +94,8 @@ export class StatsOverlay {
     const [popChart, popTitled] = this.makeTitledChart('Population', 230, 140);
     const [foodChart, foodTitled] = this.makeTitledChart('Food stored', 230, 140);
     const [throttleChart, throttleTitled] = this.makeTitledChart('Foraging throttle', 230, 140);
-    historyRow.append(popTitled, foodTitled, throttleTitled);
+    const [broodChart, broodTitled] = this.makeTitledChart('Brood (eggs / larvae / pupae)', 230, 140);
+    historyRow.append(popTitled, foodTitled, throttleTitled, broodTitled);
     root.appendChild(historyRow);
     this.populationChart = popChart;
     this.populationCtx = popChart.getContext('2d')!;
@@ -100,6 +103,8 @@ export class StatsOverlay {
     this.foodCtx = foodChart.getContext('2d')!;
     this.throttleChart = throttleChart;
     this.throttleCtx = throttleChart.getContext('2d')!;
+    this.broodChart = broodChart;
+    this.broodCtx = broodChart.getContext('2d')!;
 
     const histogramRow = document.createElement('div');
     histogramRow.className = 'stats-chart-row';
@@ -246,6 +251,11 @@ export class StatsOverlay {
     this.drawSparkline(this.populationCtx, this.populationChart, frames, sim.history.map((s) => s.population), '#3799bb', 0);
     this.drawSparkline(this.foodCtx, this.foodChart, frames, sim.history.map((s) => s.foodStored), '#4caf7d', 0);
     this.drawSparkline(this.throttleCtx, this.throttleChart, frames, sim.history.map((s) => s.foragingThrottle), '#e8a33d', 2);
+    this.drawMultiSparkline(this.broodCtx, this.broodChart, frames, [
+      { label: 'Eggs', color: '#d8dade', values: sim.history.map((s) => s.eggs) },
+      { label: 'Larvae', color: '#b98cd6', values: sim.history.map((s) => s.larvae) },
+      { label: 'Pupae', color: '#e8a33d', values: sim.history.map((s) => s.pupae) },
+    ]);
     this.drawHistogram(this.ageCtx, this.ageCanvas, ages, (n) => `${n.toFixed(0)}d`);
     this.drawHistogram(this.sizeCtx, this.sizeCanvas, sizes, (n) => `${n.toFixed(1)}mm`);
   }
@@ -379,6 +389,98 @@ export class StatsOverlay {
     ctx.closePath();
     ctx.fillStyle = `${color}33`;
     ctx.fill();
+  }
+
+  /** Three-series variant of `drawSparkline`, for the brood breakdown — eggs/larvae/pupae share
+   * one y-axis (counts of brood items) since they're the same unit, drawn as plain lines (no area
+   * fill, unlike the single-series chart) so overlapping series stay legible, with a small color
+   * key up top standing in for the missing per-line labels. */
+  private drawMultiSparkline(
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    frames: number[],
+    series: Array<{ label: string; color: string; values: number[] }>,
+  ): void {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (frames.length < 2) {
+      ctx.fillStyle = '#8b909a';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('gathering data…', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
+    const allValues = series.flatMap((s) => s.values);
+    const min = Math.min(0, ...allValues);
+    const max = Math.max(...allValues, 1);
+    const range = max - min || 1;
+    const padLeft = 24;
+    const padRight = 8;
+    const padTop = 22;
+    const padBottom = 16;
+    const w = canvas.width - padLeft - padRight;
+    const h = canvas.height - padTop - padBottom;
+    const xAt = (i: number) => padLeft + (i / (frames.length - 1)) * w;
+    const yAt = (v: number) => padTop + h - ((v - min) / range) * h;
+
+    ctx.font = '9px sans-serif';
+
+    // legend: one colored key + label per series, left to right along the top
+    let legendX = padLeft;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (const s of series) {
+      ctx.fillStyle = s.color;
+      ctx.fillRect(legendX, 4, 8, 8);
+      ctx.fillStyle = '#8b909a';
+      ctx.fillText(s.label, legendX + 11, 8);
+      legendX += 11 + ctx.measureText(s.label).width + 10;
+    }
+
+    // y-axis gridlines + count ticks (min / mid / max)
+    ctx.strokeStyle = '#2c3036';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#8b909a';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (const t of [min, min + range / 2, max]) {
+      const y = yAt(t);
+      ctx.beginPath();
+      ctx.moveTo(padLeft, Math.round(y) + 0.5);
+      ctx.lineTo(padLeft + w, Math.round(y) + 0.5);
+      ctx.stroke();
+      ctx.fillText(t.toFixed(0), padLeft - 6, y);
+    }
+
+    // x-axis frame ticks (first / middle / last sample)
+    ctx.textBaseline = 'top';
+    const xTickIndices = [...new Set([0, Math.floor((frames.length - 1) / 2), frames.length - 1])];
+    xTickIndices.forEach((i, n) => {
+      ctx.textAlign = n === 0 ? 'left' : n === xTickIndices.length - 1 ? 'right' : 'center';
+      ctx.fillText(`${frames[i]}`, xAt(i), padTop + h + 4);
+    });
+
+    // axis lines, a bit more visible than the gridlines
+    ctx.strokeStyle = '#8b909a';
+    ctx.beginPath();
+    ctx.moveTo(padLeft + 0.5, padTop);
+    ctx.lineTo(padLeft + 0.5, padTop + h + 0.5);
+    ctx.lineTo(padLeft + w, padTop + h + 0.5);
+    ctx.stroke();
+
+    // one plain line per series — no area fill, so overlapping series stay readable
+    for (const s of series) {
+      ctx.beginPath();
+      s.values.forEach((v, i) => {
+        const x = xAt(i);
+        const y = yAt(v);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
 
   /** Generic bucketed histogram, shared by the age and size distributions — a real y-axis (count
