@@ -104,6 +104,9 @@ export interface HistorySample {
   foodStored: number;
   foragingThrottle: number;
   dugCount: number;
+  eggs: number;
+  larvae: number;
+  pupae: number;
 }
 const HISTORY_SAMPLE_INTERVAL_FRAMES = 30;
 /** Caps memory/redraw cost — old samples fall off the front as new ones are appended. */
@@ -557,12 +560,24 @@ export class Simulation {
 
   /** Appends one `HistorySample`, dropping the oldest once over `HISTORY_MAX_SAMPLES`. */
   private recordHistorySample(): void {
+    let eggs = 0;
+    let larvae = 0;
+    let pupae = 0;
+    for (const b of this.brood) {
+      if (b.stage === 'egg') eggs++;
+      else if (b.stage === 'larva') larvae++;
+      else pupae++;
+    }
+
     this.history.push({
       frame: this.frame,
       population: this.ants.length,
       foodStored: this.foodStored,
       foragingThrottle: this.foragingThrottle,
       dugCount: this.undergroundGrid.dugCount(),
+      eggs,
+      larvae,
+      pupae,
     });
     if (this.history.length > HISTORY_MAX_SAMPLES) this.history.shift();
   }
