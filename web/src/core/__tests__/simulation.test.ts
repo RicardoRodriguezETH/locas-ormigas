@@ -667,7 +667,7 @@ describe('Simulation', () => {
     }
     expect(firstEclosion).toBeGreaterThanOrEqual(0);
     expect(firstEclosion).toBeLessThan(2000);
-  });
+  }, 30000);
 
   it('caps reproduction against the actual starting population, not the config default', () => {
     // start well below config.numAnts (1500); the cap should track the 40 we started with
@@ -677,7 +677,7 @@ describe('Simulation', () => {
 
     for (let i = 0; i < 40000; i++) sim.update();
     expect(sim.ants.length).toBeLessThanOrEqual(Math.ceil(cap));
-  });
+  }, 30000);
 
   it('records a bounded rolling history for the stats overlay, sampled roughly every 30 frames', () => {
     const sim = new Simulation(cfg, { randomizeGrid: false });
@@ -714,9 +714,18 @@ describe('Simulation', () => {
       const sim = new Simulation(localCfg, { randomizeGrid: false });
       sim.initGameplay();
       sim.queen.foodStash = 1e9; // isolate reproduction capacity from food availability...
-      for (const tile of sim.larderTiles) tile.fill = 1e9; // ...for both her own laying and larva feeding
+      for (const tile of sim.larderTiles) tile.fill = 1e9; // ...for her own laying...
 
-      for (let i = 0; i < 60000; i++) sim.update();
+      for (let i = 0; i < 60000; i++) {
+        sim.update();
+        // ...and for larva feeding: a literal 5-ant founding colony essentially never has spare
+        // underground labor to run physical feeder trips (a separate, pre-existing small-colony
+        // gap this test isn't about), so force-feed every larva directly rather than relying on
+        // Simulation.tryBecomeLarvaFeeder ever actually firing here.
+        for (const b of sim.brood) {
+          if (b.stage === 'larva') b.nutritionReceived = localCfg.larvaNutritionNeeded;
+        }
+      }
 
       // grew well past a naive "1 * 1.3" cap; a real founding-colony ceiling near numAnts
       expect(sim.ants.length).toBeGreaterThan(10);

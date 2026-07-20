@@ -152,6 +152,23 @@ export interface SimConfig {
   antRestSpeed: number;
   /** Heading jitter while milling at rest. */
   antRestErratic: number;
+  /** Trophallaxis (flavor only — see `antTrophallaxisFrames`): world-unit distance within which
+   * two resting surface ants are close enough to trigger a food-sharing pause. Deliberately tight
+   * (well under one grid cell) so it reads as two ants actually in antennal contact, not a pairing
+   * across the whole resting cluster. */
+  antTrophallaxisRadius: number;
+  /** Trophallaxis: per-frame chance an eligible nearby pair (see `antTrophallaxisRadius`) actually
+   * starts a hand-off, rolled once per pair per frame while both are idle and neither is already
+   * mid-exchange. Kept low so it reads as occasional social behavior rather than every resting ant
+   * glowing constantly. */
+  antTrophallaxisChance: number;
+  /** Trophallaxis: frames both ants in a pair spend paused together once triggered, tinted the
+   * same warm color as `Ant.chewingUntil` — purely a visual/social cue (see `Ant.trophallaxisUntil`).
+   * No food numbers move: unlike the queen (`antQueenFeedFrames`) and larvae (`antLarvaFeedFrames`),
+   * ordinary workers aren't modeled as needing to be fed themselves, so this never touches
+   * `foodStored` or any ant's cargo — it's colony-life flavor, gated on the colony actually having
+   * some food stored so it doesn't play out of a truly empty larder. */
+  antTrophallaxisFrames: number;
   /** At or below this many total ants, the whole rest/idle activity cycle is suppressed — every
    * ant forages continuously, and anyone already resting is woken immediately — regardless of
    * `antInitialActiveFraction`/timers/recruitment. All of the above (mostly-resting start,
@@ -280,12 +297,11 @@ export interface SimConfig {
   /** Larvae need both age *and* accumulated feeding (`larvaNutritionNeeded`) to pupate — well-
    * fed brood develops faster in reality, but here it's a hard gate: underfed larvae just wait. */
   larvaDurationDays: number;
+  /** Number of physical feeding visits (see `antLarvaFeedFrames`) a larva needs before it's
+   * allowed to pupate — each visit delivers exactly 1 unit, the same "1 food unit = 1 nutrition
+   * unit" idea as before, just paid out by an actual nurse trip instead of an abstract per-frame
+   * trickle from the shared larder. */
   larvaNutritionNeeded: number;
-  /** Nutrition/frame a larva receives for free whenever `foodStored` is available (a stand-in
-   * for individual nurse-ant feeding trips — the colony-level food flow is real and meaningful,
-   * but this skips animating a specific worker carrying food to a specific larva). Costs
-   * `foodStored` at the same rate (1 food unit = 1 nutrition unit). */
-  larvaFeedRatePerFrame: number;
   pupaDurationDays: number;
   /** [min, max] frames between the queen's egg-laying attempts. Each attempt costs
    * `queenEggFoodCost` from `foodStored`; if there isn't enough, she just waits and retries
@@ -301,6 +317,12 @@ export interface SimConfig {
    * transfer (see `Ant.queenFeedUntil`, and `antFoodChewFrames`'s doc comment for the convention
    * this follows). */
   antQueenFeedFrames: number;
+  /** Frames a nurse ant spends physically feeding a larva once it's walked there with a claimed
+   * unit of food, before that unit actually lands in the larva's `nutritionReceived` — same timed
+   * hand-off shape as `antQueenFeedFrames` (see `Ant.larvaFeedUntil`), replacing the old abstract
+   * per-frame trickle from the shared larder with an actual physical trophallaxis trip
+   * (`Simulation.tryBecomeLarvaFeeder`). */
+  antLarvaFeedFrames: number;
   /** Homeostatic laying target as a multiple of the starting population: the queen lays to keep
    * living workers + in-pipeline brood near `initialPopulation * this`, replacing natural-death
    * losses so the colony holds steady rather than growing unboundedly or bleeding out. */
@@ -447,6 +469,9 @@ export const defaultConfig: SimConfig = {
   antRestTetherRadius: 60,
   antRestSpeed: 0.2,
   antRestErratic: 0.35,
+  antTrophallaxisRadius: 10,
+  antTrophallaxisChance: 0.01,
+  antTrophallaxisFrames: 90,
   antSmallColonyThreshold: 20,
   antSmallColonyHomingBlend: 0.15,
   antStuckCheckFrames: 1200,
@@ -482,7 +507,6 @@ export const defaultConfig: SimConfig = {
   eggDurationDays: 12,
   larvaDurationDays: 26,
   larvaNutritionNeeded: 8,
-  larvaFeedRatePerFrame: 0.01,
   pupaDurationDays: 18,
   // faster than before so homeostatic laying can actually keep pace with worker deaths and hold
   // the colony steady (rather than slowly bleeding out); still gated by food and the committed-
@@ -491,6 +515,7 @@ export const defaultConfig: SimConfig = {
   queenEggFoodCost: 5,
   queenEggRetryFrames: 60,
   antQueenFeedFrames: 120,
+  antLarvaFeedFrames: 90,
   populationCapMultiplier: 1.3,
   foodTileCapacity: 20,
   broodTileCapacity: 5,

@@ -14,7 +14,7 @@ import {
   updateAnt,
   updateRestingMovement,
 } from './ant';
-import { type Brood, type BroodStage, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from './brood';
+import { type Brood, type BroodStage, type Queen, advanceBroodAge, createEgg, createQueen, createSeededBrood, tryAdvanceBroodStage } from './brood';
 import { GRID_COM_SCAN, INTERESTS, type SimConfig, defaultConfig } from './config';
 import { CaveCell, FoodCell, type FoodType } from './cells';
 import { type PaintableCellType, type SerializedGridCell, WorldGrid, readPheromoneFlow, readPheromoneStrength, readTraffic } from './grid';
@@ -112,14 +112,17 @@ const HISTORY_SAMPLE_INTERVAL_FRAMES = 30;
 /** Caps memory/redraw cost — old samples fall off the front as new ones are appended. */
 const HISTORY_MAX_SAMPLES = 400;
 
-/** `Ant`, but `carriedBrood`/`fetchingBrood` are indices into `SaveData.brood` instead of direct
- * object references — both are shared references into `Simulation.brood` in the live game (the
- * same item is reachable from `brood[]` *and* from whichever ant is carrying/fetching it), which
- * plain JSON has no way to express; an index lets `Simulation.loadSaveData` reconnect the same
- * shared reference on the other side instead of silently forking two independent copies. */
-export interface SerializedAnt extends Omit<Ant, 'carriedBrood' | 'fetchingBrood'> {
+/** `Ant`, but `carriedBrood`/`fetchingBrood`/`fetchingFoodForLarva`/`carryingFoodForLarva` are
+ * indices into `SaveData.brood` instead of direct object references — all four are shared
+ * references into `Simulation.brood` in the live game (the same item is reachable from `brood[]`
+ * *and* from whichever ant is carrying/fetching/feeding it), which plain JSON has no way to
+ * express; an index lets `Simulation.loadSaveData` reconnect the same shared reference on the
+ * other side instead of silently forking independent copies. */
+export interface SerializedAnt extends Omit<Ant, 'carriedBrood' | 'fetchingBrood' | 'fetchingFoodForLarva' | 'carryingFoodForLarva'> {
   carriedBroodIndex: number | null;
   fetchingBroodIndex: number | null;
+  fetchingFoodForLarvaIndex: number | null;
+  carryingFoodForLarvaIndex: number | null;
 }
 
 /** Everything needed to exactly resume a running `Simulation` later — see
@@ -184,10 +187,12 @@ export class Simulation {
    * doc comment. */
   nurseryTiles: BroodTile[] = [];
   /** Colony-wide stored food — the live sum across every `larderTiles` fill level, not storage in
-   * its own right. Spent on larva feeding (`updateQueenAndBrood`); egg-laying draws on
-   * `queen.foodStash` instead, which only grows via an actual feeding trip (see
-   * `tryBecomeQueenFeeder`). Deliveries are written directly into a specific tile (see
-   * `depositFoodUnit`), never into this sum. */
+   * its own right. Neither larva feeding nor egg-laying draws on this sum directly anymore: both
+   * the queen (`queen.foodStash`, see `tryBecomeQueenFeeder`) and each larva
+   * (`Brood.nutritionReceived`, see `tryBecomeLarvaFeeder`) have to actually be fed by a physical
+   * feeder-ant trip, which drains a specific tile directly. This getter exists for the UI and for
+   * gating those feeder trips on the larder having *something* to give at all. Deliveries are
+   * written directly into a specific tile (see `depositFoodUnit`), never into this sum. */
   get foodStored(): number {
     let total = 0;
     for (const tile of this.larderTiles) total += tile.fill;
@@ -468,8 +473,9 @@ export class Simulation {
 
       const isCallow = getLifeStage(ant, this.config) === 'callow';
       // pale/soft-bodied teneral coloring while callow, full color once mature; a warm tint while
-      // chewing off a bite (see Ant.chewingUntil) so the pause reads as "eating," not a freeze/bug
-      ant.color = ant.chewingUntil >= 0 ? [255, 205, 90] : isCallow ? [220, 220, 220] : [255, 255, 255];
+      // chewing off a bite or mid-trophallaxis (see Ant.chewingUntil/trophallaxisUntil) so the
+      // pause reads as "exchanging food," not a freeze/bug
+      ant.color = ant.chewingUntil >= 0 || ant.trophallaxisUntil >= 0 ? [255, 205, 90] : isCallow ? [220, 220, 220] : [255, 255, 255];
 
       if (ant.layer === 'underground') {
         this.stepUndergroundAnt(ant);
@@ -501,6 +507,7 @@ export class Simulation {
       if (ant.layer === 'surface' && !dead?.has(ant)) updateAnt(ant, this.config, this.frame);
     }
 
+    this.updateTrophallaxis();
     this.updateForagingThrottle();
     // relax the scent field after this frame's movement/discovery, before it's read for the cave
     // signal below and, next frame, by every diffusion-following ant.
@@ -527,6 +534,15 @@ export class Simulation {
     // died already holding a unit claimed from the larder, mid-carry to the queen — credit it to
     // her stash rather than losing it, same idea as the delivery cargo above
     if (ant.carryingFoodForQueen) this.queen.foodStash += 1;
+    if (ant.fetchingFoodForLarva) ant.fetchingFoodForLarva.beingFed = false; // release the claim so another feeder can take it
+    if (ant.carryingFoodForLarva) {
+      // same idea as the queen's stash credit above: died already holding a claimed unit mid-carry
+      const larva = ant.carryingFoodForLarva;
+      if (this.brood.includes(larva) && larva.stage === 'larva') {
+        larva.nutritionReceived = Math.min(this.config.larvaNutritionNeeded, larva.nutritionReceived + 1);
+      }
+      larva.beingFed = false;
+    }
     if (ant.layer === 'underground') {
       this.undergroundAntCount = Math.max(0, this.undergroundAntCount - 1);
     } else {
@@ -630,22 +646,6 @@ export class Simulation {
     tile.fill = Math.min(this.config.foodTileCapacity, tile.fill + 1);
   }
 
-  /** Drains `amount` from the larder, fullest tiles first (the mirror of how deliveries fill the
-   * emptiest first) — so a few tiles stay topped up as a buffer instead of every tile being drawn
-   * down equally thin. Used for larva feeding, which (unlike the queen) still draws on the
-   * colony's shared food rather than requiring its own physical feeding trip — see
-   * `SimConfig.larvaFeedRatePerFrame`'s doc comment for why that abstraction stays as-is. */
-  private consumeFood(amount: number): void {
-    let remaining = amount;
-    const byFill = [...this.larderTiles].sort((a, b) => b.fill - a.fill);
-    for (const tile of byFill) {
-      if (remaining <= 0) break;
-      const take = Math.min(tile.fill, remaining);
-      tile.fill -= take;
-      remaining -= take;
-    }
-  }
-
   /** A nursery tile with room for `stage` — an existing tile already holding that stage with a
    * free slot, preferred over claiming a fresh empty tile (packs a stage's brood together rather
    * than spreading it thin across tiles it doesn't need to occupy yet). Null if every tile is
@@ -717,15 +717,22 @@ export class Simulation {
    * 5. Fetching food for the queen (`fetchingFoodForQueen`): walk to a claimed larder tile, then
    *    pick up a unit and switch to carrying it to her — see `tryBecomeQueenFeeder`/
    *    `stepFetchFoodForQueen`.
-   * 6. Already walking out (`headingToSurface`): keep following the route back to the entrance
+   * 6. Carrying food for a larva (`carryingFoodForLarva`): steer for its nursery tile and, on
+   *    arrival, spend a few frames physically feeding it — see `stepCarryFoodForLarva`.
+   * 7. Fetching food for a larva (`fetchingFoodForLarva`): walk to a claimed larder tile, then
+   *    pick up a unit and switch to carrying it to the target larva — see
+   *    `tryBecomeLarvaFeeder`/`stepFetchFoodForLarva`.
+   * 8. Already walking out (`headingToSurface`): keep following the route back to the entrance
    *    and resurface on arrival — see `beginHeadingToSurface`/`stepHeadToExit`.
-   * 7. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry/fetch):
+   * 9. Duty shift just ended (`frame >= undergroundDutyUntil`, and not mid-delivery/carry/fetch):
    *    start walking back to the entrance rather than resurfacing instantly from wherever the
    *    ant happens to be — ants only ever cross layers by actually reaching the hole.
-   * 8. Loose brood exists: become a nurse and go fetch it (`tryBecomeNurse`).
-   * 9. The queen needs feeding and the larder has something to give: become a feeder
+   * 10. Loose brood exists: become a nurse and go fetch it (`tryBecomeNurse`).
+   * 11. The queen needs feeding and the larder has something to give: become a queen-feeder
    *    (`tryBecomeQueenFeeder`) — lower priority than tending brood.
-   * 10. Otherwise: wander the dug tunnel network, digging out the colony's current designated
+   * 12. A larva needs feeding and the larder has something to give: become a larva-feeder
+   *    (`tryBecomeLarvaFeeder`) — lower priority still (the queen's own reproduction comes first).
+   * 13. Otherwise: wander the dug tunnel network, digging out the colony's current designated
    *    site(s) if bumped into (see `UndergroundGrid.ensureDesignatedFrontier`) — no pheromones,
    *    no rest cycle. Ants bumping into a plain, non-designated wall just turn away;
    *    they can't opportunistically eat through arbitrary dirt, only ever the colony's current
@@ -751,6 +758,14 @@ export class Simulation {
       this.stepFetchFoodForQueen(ant);
       return;
     }
+    if (ant.carryingFoodForLarva) {
+      this.stepCarryFoodForLarva(ant);
+      return;
+    }
+    if (ant.fetchingFoodForLarva) {
+      this.stepFetchFoodForLarva(ant);
+      return;
+    }
     if (ant.headingToSurface) {
       this.stepHeadToExit(ant);
       return;
@@ -761,6 +776,7 @@ export class Simulation {
     }
     if (this.tryBecomeNurse(ant)) return; // walks to fetch the brood next frame
     if (this.tryBecomeQueenFeeder(ant)) return; // walks to fetch food for the queen next frame
+    if (this.tryBecomeLarvaFeeder(ant)) return; // walks to fetch food for a larva next frame
 
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
@@ -984,6 +1000,77 @@ export class Simulation {
     }
   }
 
+  /** Turns an idle underground ant into a larva-feeder if any settled larva is short of
+   * `larvaNutritionNeeded` and not already claimed by another feeder, and the larder has
+   * something to give — lower priority than tending brood and feeding the queen (see
+   * `stepUndergroundAnt`'s dispatch order). Only considers larvae that are actually settled on a
+   * tile (`tileIndex !== null`, not `beingCarried`) — one mid-relocation has an unstable position,
+   * so feeding it would mean chasing a moving target. Claims the nearest via `beingFed`, the same
+   * one-claim-at-a-time idea as `tryBecomeNurse`'s `beingCarried`. */
+  private tryBecomeLarvaFeeder(ant: Ant): boolean {
+    let target: Brood | null = null;
+    let nearestDist = Infinity;
+    for (const b of this.brood) {
+      if (b.stage !== 'larva' || b.beingCarried || b.tileIndex === null || b.beingFed) continue;
+      if (b.nutritionReceived >= this.config.larvaNutritionNeeded) continue;
+      const d = distance(ant.position, b.position);
+      if (d < nearestDist) {
+        target = b;
+        nearestDist = d;
+      }
+    }
+    if (!target) return false;
+    const tile = this.fullestFoodTile();
+    if (!tile || tile.fill <= 0) return false;
+
+    target.beingFed = true;
+    ant.fetchingFoodForLarva = target;
+    ant.larvaFeedFetchPath = this.undergroundGrid.findPath(ant.position, tile.position) ?? [];
+    return true;
+  }
+
+  /** Walks a feeder to the larder tile it's heading for, claims one unit of food from it, then
+   * switches to carrying that unit to the larva it claimed. */
+  private stepFetchFoodForLarva(ant: Ant): void {
+    const larva = ant.fetchingFoodForLarva!;
+    if (!this.brood.includes(larva) || larva.stage !== 'larva') {
+      // eclosed/removed/somehow advanced out from under us — release the claim and go back to idle
+      larva.beingFed = false;
+      ant.fetchingFoodForLarva = null;
+      ant.larvaFeedFetchPath = [];
+      return;
+    }
+    if (this.followPath(ant, ant.larvaFeedFetchPath, this.config.antUndergroundSpeed)) {
+      const tile = this.nearestFoodTile(ant.position);
+      if (tile && tile.fill > 0) tile.fill -= 1;
+      ant.fetchingFoodForLarva = null;
+      ant.larvaFeedFetchPath = [];
+      ant.carryingFoodForLarva = larva;
+      ant.larvaFeedCarryPath = this.undergroundGrid.findPath(ant.position, larva.position) ?? [];
+    }
+  }
+
+  /** Walks the feeder to the target larva, then — once physically there — spends
+   * `antLarvaFeedFrames` actually feeding it before the unit reaches its `nutritionReceived`,
+   * rather than an instant transfer the moment the ant arrives. Same timed shape as
+   * `stepCarryFoodForQueen`. */
+  private stepCarryFoodForLarva(ant: Ant): void {
+    const larva = ant.carryingFoodForLarva!;
+    if (ant.larvaFeedUntil >= 0) {
+      if (this.frame < ant.larvaFeedUntil) return; // still feeding it
+      if (this.brood.includes(larva) && larva.stage === 'larva') {
+        larva.nutritionReceived = Math.min(this.config.larvaNutritionNeeded, larva.nutritionReceived + 1);
+      }
+      larva.beingFed = false;
+      ant.carryingFoodForLarva = null;
+      ant.larvaFeedUntil = -1;
+      return;
+    }
+    if (this.followPath(ant, ant.larvaFeedCarryPath, this.config.antUndergroundSpeed)) {
+      ant.larvaFeedUntil = this.frame + this.config.antLarvaFeedFrames;
+    }
+  }
+
   /** Duty shift just ended: rather than resurfacing instantly from wherever the ant happens to
    * be underground (which could be deep in the larder or nursery, or way out at the current dig
    * frontier), start walking the route back to the entrance — see `stepHeadToExit`. Keeps
@@ -1052,9 +1139,6 @@ export class Simulation {
       const b = this.brood[i];
       const oldStage = b.stage;
       advanceBroodAge(b, cfg);
-      if (b.stage === 'larva') {
-        this.consumeFood(feedLarva(b, cfg, this.foodStored));
-      }
       const readyToEclose = tryAdvanceBroodStage(b, cfg);
       if (b.stage !== oldStage && b.tileIndex !== null) {
         // just advanced (egg->larva or larva->pupa) while already settled on a tile — that tile
@@ -1120,6 +1204,40 @@ export class Simulation {
     }
     const ratio = this.deliveryEmaFast / this.deliveryEmaSlow;
     this.foragingThrottle = Math.min(cfg.antForagingThrottleMax, Math.max(cfg.antForagingThrottleMin, ratio));
+  }
+
+  /** Purely cosmetic worker-to-worker trophallaxis: pairs up nearby resting surface ants and
+   * gives them a shared, timed, tinted pause (`Ant.trophallaxisUntil`) — colony-life flavor, not a
+   * food-economy mechanic (ordinary workers aren't modeled as needing to be fed themselves; see
+   * `SimConfig.antTrophallaxisFrames`'s doc comment). Gated on the colony actually having some
+   * food stored, so it never plays out of a truly empty larder. Pairs consecutive entries in a
+   * single pass over the idle list rather than an all-pairs scan — imprecise (only checks
+   * neighbors in iteration order, not literally the closest ant), but that's fine for a flavor
+   * effect and keeps this cheap even with a colony numbering in the thousands. */
+  private updateTrophallaxis(): void {
+    if (this.foodStored <= 0) return;
+
+    const idle: Ant[] = [];
+    for (const ant of this.ants) {
+      if (ant.layer !== 'surface' || !ant.paused) continue;
+      if (ant.trophallaxisUntil >= 0) {
+        if (this.frame >= ant.trophallaxisUntil) ant.trophallaxisUntil = -1;
+        continue; // mid-exchange, or just finished this frame — either way not eligible to restart
+      }
+      idle.push(ant);
+    }
+
+    for (let i = 0; i < idle.length - 1; i++) {
+      const a = idle[i];
+      if (a.trophallaxisUntil >= 0) continue; // paired with an earlier ant this same pass
+      const b = idle[i + 1];
+      if (b.trophallaxisUntil >= 0) continue;
+      if (distance(a.position, b.position) > this.config.antTrophallaxisRadius) continue;
+      if (Math.random() >= this.config.antTrophallaxisChance) continue;
+      const until = this.frame + this.config.antTrophallaxisFrames;
+      a.trophallaxisUntil = until;
+      b.trophallaxisUntil = until;
+    }
   }
 
   /** Resting ants just mill slowly near the cave — no pheromone communication, no goal-seeking
@@ -1573,11 +1691,13 @@ export class Simulation {
   toSaveData(): SaveData {
     const broodIndex = new Map<Brood, number>(this.brood.map((b, i) => [b, i]));
     const ants: SerializedAnt[] = this.ants.map((ant) => {
-      const { carriedBrood, fetchingBrood, ...rest } = ant;
+      const { carriedBrood, fetchingBrood, fetchingFoodForLarva, carryingFoodForLarva, ...rest } = ant;
       return {
         ...rest,
         carriedBroodIndex: carriedBrood ? (broodIndex.get(carriedBrood) ?? null) : null,
         fetchingBroodIndex: fetchingBrood ? (broodIndex.get(fetchingBrood) ?? null) : null,
+        fetchingFoodForLarvaIndex: fetchingFoodForLarva ? (broodIndex.get(fetchingFoodForLarva) ?? null) : null,
+        carryingFoodForLarvaIndex: carryingFoodForLarva ? (broodIndex.get(carryingFoodForLarva) ?? null) : null,
       };
     });
 
@@ -1643,11 +1763,13 @@ export class Simulation {
     this.undergroundGrid.importDugCells(data.dugCells);
 
     this.ants = data.ants.map((saved) => {
-      const { carriedBroodIndex, fetchingBroodIndex, ...rest } = saved;
+      const { carriedBroodIndex, fetchingBroodIndex, fetchingFoodForLarvaIndex, carryingFoodForLarvaIndex, ...rest } = saved;
       return {
         ...rest,
         carriedBrood: carriedBroodIndex !== null ? this.brood[carriedBroodIndex] : null,
         fetchingBrood: fetchingBroodIndex !== null ? this.brood[fetchingBroodIndex] : null,
+        fetchingFoodForLarva: fetchingFoodForLarvaIndex !== null ? this.brood[fetchingFoodForLarvaIndex] : null,
+        carryingFoodForLarva: carryingFoodForLarvaIndex !== null ? this.brood[carryingFoodForLarvaIndex] : null,
       };
     });
   }

@@ -33,6 +33,10 @@ export interface Brood {
    * reused without colliding with whichever other item currently holds a numerically-later
    * slot — see `Simulation.vacateBroodTile`. */
   slotIndex: number | null;
+  /** True while some ant has claimed this larva and is en route to feed it (see
+   * `Simulation.tryBecomeLarvaFeeder`) — excludes it from being claimed a second time by another
+   * feeder mid-trip, the same idea as `beingCarried` for nurses. Irrelevant for eggs/pupae. */
+  beingFed: boolean;
 }
 
 export function createEgg(position: Vector2): Brood {
@@ -45,6 +49,7 @@ export function createEgg(position: Vector2): Brood {
     atNursery: false,
     tileIndex: null,
     slotIndex: null,
+    beingFed: false,
   };
 }
 
@@ -71,24 +76,11 @@ export function createSeededBrood(position: Vector2, totalAgeDays: number, cfg: 
     stage = 'pupa';
     ageDays = totalAgeDays - larvaEnd;
   }
-  return { stage, position: { ...position }, ageDays, nutritionReceived, beingCarried: false, atNursery: true, tileIndex: null, slotIndex: null };
+  return { stage, position: { ...position }, ageDays, nutritionReceived, beingCarried: false, atNursery: true, tileIndex: null, slotIndex: null, beingFed: false };
 }
 
 export function advanceBroodAge(brood: Brood, cfg: SimConfig): void {
   brood.ageDays += 1 / cfg.framesPerDay;
-}
-
-/** Feeds a larva from the colony's food store, if there's any to give — caller is responsible
- * for actually deducting `foodStored` by the same amount (kept as a pure function here so the
- * colony-level bookkeeping stays visible in `Simulation`, not buried in this module). Returns
- * how much was actually fed (0 if not a larva, already fully fed, or nothing to feed with). */
-export function feedLarva(brood: Brood, cfg: SimConfig, foodAvailable: number): number {
-  if (brood.stage !== 'larva') return 0;
-  const remaining = cfg.larvaNutritionNeeded - brood.nutritionReceived;
-  if (remaining <= 0) return 0;
-  const amount = Math.min(cfg.larvaFeedRatePerFrame, remaining, foodAvailable);
-  brood.nutritionReceived += amount;
-  return amount;
 }
 
 /** Advances egg -> larva -> pupa on age (and, for larvae, accumulated feeding); returns true
