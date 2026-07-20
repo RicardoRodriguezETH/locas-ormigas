@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from '../config';
-import { advanceBroodAge, createEgg, createQueen, createSeededBrood, feedLarva, tryAdvanceBroodStage } from '../brood';
+import { advanceBroodAge, createEgg, createQueen, createSeededBrood, tryAdvanceBroodStage } from '../brood';
 
 describe('brood', () => {
   it('createEgg starts at age 0 with no nutrition', () => {
@@ -58,27 +58,6 @@ describe('brood', () => {
     pupa.ageDays = 8.1;
     expect(tryAdvanceBroodStage(pupa, cfg)).toBe(true);
     expect(pupa.stage).toBe('pupa'); // caller handles removal, not this function
-  });
-
-  it('feedLarva only feeds larvae, capped by need and food available', () => {
-    const cfg = { ...defaultConfig, larvaFeedRatePerFrame: 1, larvaNutritionNeeded: 3 };
-    const egg = createEgg({ x: 0, y: 0 });
-    expect(feedLarva(egg, cfg, 10)).toBe(0); // not a larva
-
-    const larva = createEgg({ x: 0, y: 0 });
-    larva.stage = 'larva';
-    expect(feedLarva(larva, cfg, 10)).toBe(1); // capped by feed rate
-    expect(larva.nutritionReceived).toBe(1);
-
-    larva.nutritionReceived = 2.5;
-    expect(feedLarva(larva, cfg, 10)).toBeCloseTo(0.5); // capped by remaining need
-    expect(larva.nutritionReceived).toBeCloseTo(3);
-
-    expect(feedLarva(larva, cfg, 10)).toBe(0); // fully fed, nothing more needed
-
-    const hungryLarva = createEgg({ x: 0, y: 0 });
-    hungryLarva.stage = 'larva';
-    expect(feedLarva(hungryLarva, cfg, 0.2)).toBeCloseTo(0.2); // capped by food available
   });
 
   it('createQueen starts at her position with no delay before her first attempt', () => {

@@ -157,6 +157,30 @@ export interface Ant {
    * not an instant hand-off, same shape as `chewingUntil`. See `SimConfig.antQueenFeedFrames`. */
   queenFeedUntil: number;
 
+  /** The larva this ant has claimed and is walking *to* a larder tile to fetch food for, if any —
+   * see `Simulation.tryBecomeLarvaFeeder`. Mirrors `fetchingFoodForQueen`'s shape but needs an
+   * actual target reference (unlike the singular queen, there are many larvae to choose between).
+   * Null the rest of the time. */
+  fetchingFoodForLarva: Brood | null;
+  /** Remaining waypoints to the chosen larder tile, mirroring `queenFeedFetchPath`. */
+  larvaFeedFetchPath: Vector2[];
+  /** The larva this ant is carrying a collected unit of food *to*, or waiting out the feeding
+   * hand-off itself once arrived (see `larvaFeedUntil`). Null the rest of the time. */
+  carryingFoodForLarva: Brood | null;
+  /** Remaining waypoints to the target larva's nursery tile, mirroring `queenFeedCarryPath`. */
+  larvaFeedCarryPath: Vector2[];
+  /** Frame the feeding hand-off itself completes, once the ant has physically reached the target
+   * larva, or -1 before then/while not feeding one — same shape as `queenFeedUntil`. See
+   * `SimConfig.antLarvaFeedFrames`. */
+  larvaFeedUntil: number;
+
+  /** Frame a purely cosmetic worker-to-worker trophallaxis pause (see
+   * `Simulation.updateTrophallaxis`) finishes, or -1 while not mid-exchange. Unlike the queen/larva
+   * feeding above, this never moves any food numbers — ordinary workers aren't modeled as needing
+   * to be fed themselves, so it's just a shared paused-and-tinted moment between two resting
+   * nestmates (`SimConfig.antTrophallaxisFrames`). */
+  trophallaxisUntil: number;
+
   /** Body length in mm, sampled once per ant — see `SimConfig.antSizeRangeMm`. Not currently
    * tied to any behavior; tracked for realism and future use. */
   size: number;
@@ -217,6 +241,14 @@ export function createAnt(
     carryingFoodForQueen: false,
     queenFeedCarryPath: [],
     queenFeedUntil: -1,
+
+    fetchingFoodForLarva: null,
+    larvaFeedFetchPath: [],
+    carryingFoodForLarva: null,
+    larvaFeedCarryPath: [],
+    larvaFeedUntil: -1,
+
+    trophallaxisUntil: -1,
 
     lookingFor: 'food',
     nextTask: 'cave',
