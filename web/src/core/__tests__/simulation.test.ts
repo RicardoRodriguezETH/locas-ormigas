@@ -4,22 +4,10 @@ import { createEgg } from '../brood';
 import { CaveCell, FoodCell } from '../cells';
 import { defaultConfig } from '../config';
 import { readPheromoneStrength } from '../grid';
+import { mulberry32 as seededRandom } from '../random';
 import { Simulation } from '../simulation';
 
 const cfg = { ...defaultConfig, mapMinX: -64, mapMinY: -64, mapMaxX: 64, mapMaxY: 64, mapGridSize: 16 };
-
-/** Deterministic, seeded stand-in for `Math.random()` (mulberry32) — for tests that need varied,
- * realistic-looking randomness (not the constant 0.5 stub) without being flaky: real unseeded
- * `Math.random()` makes a test's pass/fail depend on which run it happens to be. */
-function seededRandom(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 describe('Simulation', () => {
   beforeEach(() => {
