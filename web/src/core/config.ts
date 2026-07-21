@@ -266,8 +266,6 @@ export interface SimConfig {
    * same population split into two, not extra ants (see the below-ground overlay). Debugging-
    * phase behavior only: no queen/brood/food-carrying yet, just excavating the nest. */
   antUndergroundFraction: number;
-  /** Crawl speed while digging/wandering the tunnel network. */
-  antUndergroundSpeed: number;
   /** Heading jitter for underground wandering, so tunnels get explored/dug in varied directions
    * rather than dead-straight lines. */
   antUndergroundErratic: number;
@@ -509,7 +507,6 @@ export const defaultConfig: SimConfig = {
   antLifespanMaxDays: 3000,
 
   antUndergroundFraction: 0.1,
-  antUndergroundSpeed: 0.4,
   antUndergroundErratic: 0.5,
   antUndergroundDigChance: 0.05,
   antUndergroundVolumePerAnt: 3,

@@ -782,7 +782,7 @@ export class Simulation {
     const erratic = this.config.antUndergroundErratic;
     ant.direction = rotate(ant.direction, erratic * Math.random() - erratic * 0.5);
 
-    const speed = this.config.antUndergroundSpeed;
+    const speed = this.config.antMaxSpeed;
     const nextPosition = add(ant.position, scale(ant.direction, speed));
 
     if (this.undergroundGrid.canPass(nextPosition)) {
@@ -852,7 +852,7 @@ export class Simulation {
   }
 
   private stepUndergroundDelivery(ant: Ant): void {
-    if (this.followPath(ant, ant.deliveryPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.deliveryPath, this.config.antMaxSpeed)) {
       ant.cargo.count = 0;
       ant.deliveringUnderground = false;
       this.depositFoodUnit(ant.position);
@@ -901,7 +901,7 @@ export class Simulation {
       ant.fetchPath = [];
       return;
     }
-    if (this.followPath(ant, ant.fetchPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.fetchPath, this.config.antMaxSpeed)) {
       const tile = this.reserveBroodTileSlot(brood);
       ant.fetchingBrood = null;
       ant.fetchPath = [];
@@ -921,7 +921,7 @@ export class Simulation {
    * `BROOD_SLOT_OFFSETS`) once the route is complete. */
   private stepBroodCarry(ant: Ant): void {
     const brood = ant.carriedBrood!;
-    const arrived = this.followPath(ant, ant.broodCarryPath, this.config.antUndergroundSpeed);
+    const arrived = this.followPath(ant, ant.broodCarryPath, this.config.antMaxSpeed);
     brood.position = { ...ant.position };
 
     if (arrived) {
@@ -975,7 +975,7 @@ export class Simulation {
   /** Walks a feeder to the larder tile it's heading for, claims one unit of food from it, then
    * switches to carrying that unit to the queen. */
   private stepFetchFoodForQueen(ant: Ant): void {
-    if (this.followPath(ant, ant.queenFeedFetchPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.queenFeedFetchPath, this.config.antMaxSpeed)) {
       const tile = this.nearestFoodTile(ant.position);
       if (tile && tile.fill > 0) tile.fill -= 1;
       ant.fetchingFoodForQueen = false;
@@ -996,7 +996,7 @@ export class Simulation {
       ant.queenFeedUntil = -1;
       return;
     }
-    if (this.followPath(ant, ant.queenFeedCarryPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.queenFeedCarryPath, this.config.antMaxSpeed)) {
       ant.queenFeedUntil = this.frame + this.config.antQueenFeedFrames;
     }
   }
@@ -1041,7 +1041,7 @@ export class Simulation {
       ant.larvaFeedFetchPath = [];
       return;
     }
-    if (this.followPath(ant, ant.larvaFeedFetchPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.larvaFeedFetchPath, this.config.antMaxSpeed)) {
       const tile = this.nearestFoodTile(ant.position);
       if (tile && tile.fill > 0) tile.fill -= 1;
       ant.fetchingFoodForLarva = null;
@@ -1067,7 +1067,7 @@ export class Simulation {
       ant.larvaFeedUntil = -1;
       return;
     }
-    if (this.followPath(ant, ant.larvaFeedCarryPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.larvaFeedCarryPath, this.config.antMaxSpeed)) {
       ant.larvaFeedUntil = this.frame + this.config.antLarvaFeedFrames;
     }
   }
@@ -1085,7 +1085,7 @@ export class Simulation {
   /** Follows `ant.exitPath` back to the entrance one leg at a time, then actually resurfaces
    * once it arrives — see `beginHeadingToSurface`. */
   private stepHeadToExit(ant: Ant): void {
-    if (this.followPath(ant, ant.exitPath, this.config.antUndergroundSpeed)) {
+    if (this.followPath(ant, ant.exitPath, this.config.antMaxSpeed)) {
       this.ascendToSurface(ant);
     }
   }
