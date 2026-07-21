@@ -106,6 +106,12 @@ export class WorldGrid {
   readonly maxYg: number;
 
   private cells = new Map<string, GridCellData>();
+  /** Cell keys whose `pass`/`cell` identity changed since the last `takeDirty()` — lets
+   * `SimulationRenderer` resync only the tiles that actually changed instead of redoing every
+   * cell in the grid every frame (walls/food/grass/portals are placed rarely relative to how
+   * often a frame renders). Not for pheromone/traffic changes, which the renderer doesn't
+   * visualize per-cell outside the debug overlay (drawn separately, every frame, on its own). */
+  private dirty = new Set<string>();
   private portalFactory = new PortalFactory();
   /** 'gameplay' mode only (see `Simulation.gameMode`): every food cell placed from here on —
    * whether seeded at map-build time or painted later with the tool sidebar — is finite
@@ -149,6 +155,22 @@ export class WorldGrid {
 
   private key(xg: number, yg: number): string {
     return `${xg},${yg}`;
+  }
+
+  /** Marks a cell as needing a render resync — call after actually changing `pass`/`cell`
+   * identity, not on mere reads. Public so `Simulation` can flag the one place outside this class
+   * that mutates a `GridCellData` directly (`dropCorpse`). */
+  markDirty(xg: number, yg: number): void {
+    this.dirty.add(this.key(xg, yg));
+  }
+
+  /** Drains and returns every cell key marked dirty since the last call — see `dirty`'s doc
+   * comment. Draining (not just reading) means each renderer frame only ever resyncs what changed
+   * since *its own* last look, without needing to coordinate with other readers. */
+  takeDirty(): Set<string> {
+    const out = this.dirty;
+    this.dirty = new Set();
+    return out;
   }
 
   private initCell(xg: number, yg: number, randomize: boolean): GridCellData {
@@ -216,10 +238,12 @@ export class WorldGrid {
         const linkedData = this.get(linked.gridX, linked.gridY);
         linkedData.pass = true;
         linkedData.cell = null;
+        this.markDirty(linked.gridX, linked.gridY);
       }
     }
     data.cell = null;
     data.pass = true;
+    this.markDirty(xg, yg);
   }
 
   /** Paints a tile from world coordinates, matching the UI's click/drag cell tool. */

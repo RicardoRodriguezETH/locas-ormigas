@@ -33,6 +33,9 @@ export class UndergroundRenderer {
   private readonly larderPileSprites: Sprite[] = [];
 
   private readonly groundSprites = new Map<string, Sprite>();
+  /** See `SimulationRenderer.firstCellSync`'s doc comment — same idea, one full grid pass before
+   * dirty-tracking takes over. */
+  private firstGroundSync = true;
   private readonly antSprites = new Map<Ant, Sprite>();
   /** Small food icon shown at a delivering ant's mouth, mirroring `SimulationRenderer`'s
    * cargo indicator — otherwise a food delivery in progress looks identical to plain wandering. */
@@ -145,16 +148,34 @@ export class UndergroundRenderer {
     return sprite;
   }
 
+  private syncGroundTileAt(xg: number, yg: number): void {
+    const sprite = this.groundSprites.get(tileKey(xg, yg));
+    if (!sprite) return;
+    // undug cells show the granular soil texture; dug tunnels show the open 'ground' floor
+    const dug = this.sim.undergroundGrid.get(xg, yg).dug;
+    sprite.texture = dug ? this.textures.ground : this.textures.dirt;
+    sprite.tint = 0xffffff;
+  }
+
+  /** Tunnels are dug rarely relative to how often a frame renders, so redoing all ~1600+ ground
+   * tiles every frame (regardless of visibility — see this class's doc comment) was pure waste.
+   * The first call does a full pass so a freshly-installed simulation's dig state (a pre-built
+   * starter nest, or a loaded save) renders correctly; every call after only touches cells
+   * `UndergroundGrid.takeDirty()` reports as newly dug. */
   private syncGroundTiles(): void {
     const { undergroundGrid } = this.sim;
-    for (let xg = undergroundGrid.minXg; xg <= undergroundGrid.maxXg; xg++) {
-      for (let yg = undergroundGrid.minYg; yg <= undergroundGrid.maxYg; yg++) {
-        const sprite = this.groundSprites.get(tileKey(xg, yg))!;
-        // undug cells show the granular soil texture; dug tunnels show the open 'ground' floor
-        const dug = undergroundGrid.get(xg, yg).dug;
-        sprite.texture = dug ? this.textures.ground : this.textures.dirt;
-        sprite.tint = 0xffffff;
+    if (this.firstGroundSync) {
+      this.firstGroundSync = false;
+      for (let xg = undergroundGrid.minXg; xg <= undergroundGrid.maxXg; xg++) {
+        for (let yg = undergroundGrid.minYg; yg <= undergroundGrid.maxYg; yg++) {
+          this.syncGroundTileAt(xg, yg);
+        }
       }
+      return;
+    }
+    for (const key of undergroundGrid.takeDirty()) {
+      const [xg, yg] = key.split(',').map(Number);
+      this.syncGroundTileAt(xg, yg);
     }
   }
 

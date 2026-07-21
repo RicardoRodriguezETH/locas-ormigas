@@ -561,6 +561,7 @@ export class Simulation {
     if (!cell.pass) return;
     if (cell.cell && cell.cell.type !== 'grass') return;
     cell.cell = new FoodCell('prey', { nutrients: this.config.corpseNutrients, perishable: true, isCorpse: true });
+    this.grid.markDirty(gx, gy);
   }
 
   /** A length-of-underground-duty-shift in frames, drawn *continuously* across
