@@ -398,9 +398,21 @@ export interface SimConfig {
    * between those failure modes on the stress-test map. */
   diffusionDecayPerStep: number;
   /** 'diffusion' only: the constant value a discovered resource cell is pinned to every step
-   * (a fixed-temperature source, in heat-equation terms), and the debug overlay's normalization
-   * reference. */
+   * (a fixed-temperature source, in heat-equation terms). Ants' own steering reads the raw
+   * gradient, so this only ever matters at the source itself and immediately around it — see
+   * `diffusionArrowSaturation` for the debug overlay, which needs a much smaller reference. */
   diffusionSourceStrength: number;
+  /** 'diffusion' only: the debug overlay's normalization reference for arrow length/opacity —
+   * deliberately much smaller than `diffusionSourceStrength`. A diffused scent field spreads out
+   * smoothly rather than staying near its pinned peak the way legacy/gradient/flow's discrete
+   * deposits do (those get re-topped to ~`pheromoneSaturation` by frequent re-deposits along any
+   * actually-used trail); away from the immediate source, real observed scent typically lands
+   * well under 1 (empirically: median ~0.33, p90 ~0.49 in a 600-ant colony after 6000 frames).
+   * Normalizing against the full source strength made every arrow off the source itself look
+   * faint-to-invisible even where the gradient was a perfectly good, followable signal — this is
+   * a separate, smaller reference so diffusion's arrows read at a comparable visual weight to the
+   * other algorithms' instead of looking uniquely weak. */
+  diffusionArrowSaturation: number;
   /** 'diffusion' only: relaxation steps run per simulation frame. More steps make the field
    * physically propagate across the map faster (in simulated time) without changing how often
    * ants themselves re-sample it. */
@@ -539,6 +551,7 @@ export const defaultConfig: SimConfig = {
   diffusionRate: 0.25,
   diffusionDecayPerStep: 0.9997,
   diffusionSourceStrength: 1,
+  diffusionArrowSaturation: 0.4,
   diffusionSubstepsPerFrame: 3,
 
   integrationK: 6,

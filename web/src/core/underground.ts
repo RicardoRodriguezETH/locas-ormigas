@@ -52,6 +52,10 @@ export class UndergroundGrid {
    * full grid area (every `canPass` probe on undug dirt inserts a cell), so a full scan there
    * would be a real per-frame cost. */
   private dugCells = 0;
+  /** Cell keys actually dug since the last `takeDirty()` — lets `UndergroundRenderer` resync
+   * only newly-dug tiles instead of redoing its whole grid every frame (see `WorldGrid.dirty`'s
+   * doc comment for the same idea on the surface layer). */
+  private dirty = new Set<string>();
 
   constructor(config: SimConfig) {
     this.config = config;
@@ -64,6 +68,14 @@ export class UndergroundGrid {
 
   private key(xg: number, yg: number): string {
     return `${xg},${yg}`;
+  }
+
+  /** Drains and returns every cell key actually dug since the last call — see `dirty`'s doc
+   * comment. */
+  takeDirty(): Set<string> {
+    const out = this.dirty;
+    this.dirty = new Set();
+    return out;
   }
 
   /** All cells start undug and non-diggable; created lazily on first access rather than
@@ -97,10 +109,13 @@ export class UndergroundGrid {
     const cell = this.get(xg, yg);
     // only count the false->true transition: `digChamber`/`digTunnel` overlap at seed time, so
     // the same cell can be dug more than once
-    if (!cell.dug) this.dugCells++;
+    const k = this.key(xg, yg);
+    if (!cell.dug) {
+      this.dugCells++;
+      this.dirty.add(k);
+    }
     cell.dug = true;
     cell.diggable = false;
-    const k = this.key(xg, yg);
     this.expansionCandidates.delete(k);
     this.diggableFrontier.delete(k);
 

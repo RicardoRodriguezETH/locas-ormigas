@@ -33,6 +33,17 @@ export class SimulationRenderer {
 
   private readonly groundSprites = new Map<string, Sprite>();
   private readonly cellSprites = new Map<string, Sprite>();
+  /** Cell keys currently holding a portal — see `syncPortalAnimations`'s doc comment for why
+   * these alone need a per-frame texture touch even under dirty-tracking. Typically empty or
+   * tiny (portals are a rarely-placed decorative tool), so scanning just these each frame is
+   * negligible next to scanning the whole grid. */
+  private readonly portalCellKeys = new Set<string>();
+  /** True until the first `syncGroundAndCells` call, which always does a full pass over the grid
+   * regardless of `WorldGrid`'s dirty set — establishes correct initial visuals for whatever the
+   * simulation looked like at construction (freshly built map, or a loaded save), which the dirty
+   * set alone can't guarantee it saw every cell of. Every call after that only resyncs cells
+   * `WorldGrid.takeDirty()` reports changed, instead of redoing the whole grid every frame. */
+  private firstCellSync = true;
   /** Keyed by ant, not index — population isn't fixed anymore (new workers eclose from brood)
    * and ants can leave this layer entirely (descend underground), so sprites are created
    * lazily and torn down when an ant is no longer on the surface, rather than a parallel
@@ -43,7 +54,25 @@ export class SimulationRenderer {
    * updating per frame. */
   private readonly cargoSprites = new Map<Ant, Sprite>();
 
-  showPheromones = false;
+  /** Fraction the surface layout (ground, cells, ants) dims to while the pheromone overlay is
+   * showing — the overlay is the whole point of that view, so the map/colony underneath fades
+   * back into a faint reference frame instead of visually competing with the trails on top of
+   * it. Restored to full opacity the moment the overlay is toggled back off. */
+  private static readonly BACKGROUND_DIM_ALPHA = 0.3;
+
+  private _showPheromones = false;
+
+  set showPheromones(value: boolean) {
+    this._showPheromones = value;
+    const alpha = value ? SimulationRenderer.BACKGROUND_DIM_ALPHA : 1;
+    this.groundContainer.alpha = alpha;
+    this.cellContainer.alpha = alpha;
+    this.antContainer.alpha = alpha;
+  }
+
+  get showPheromones(): boolean {
+    return this._showPheromones;
+  }
 
   set visible(value: boolean) {
     this.worldContainer.visible = value;
@@ -132,37 +161,73 @@ export class SimulationRenderer {
     }
   }
 
-  private syncGroundAndCells(): void {
+  /** Resyncs one cell's ground/cell sprites from current grid state — the shared body behind
+   * both the one-time full sync and the per-frame dirty-only sync (see `syncGroundAndCells`). */
+  private syncCellAt(xg: number, yg: number): void {
     const { grid, config } = this.sim;
-    for (let xg = grid.minXg; xg <= grid.maxXg; xg++) {
-      for (let yg = grid.minYg; yg <= grid.maxYg; yg++) {
-        const key = tileKey(xg, yg);
-        const data = grid.get(xg, yg);
+    const key = tileKey(xg, yg);
+    const data = grid.get(xg, yg);
 
-        const groundSprite = this.groundSprites.get(key)!;
-        groundSprite.texture = data.pass ? this.textures.ground : this.textures.block;
+    const groundSprite = this.groundSprites.get(key);
+    if (groundSprite) groundSprite.texture = data.pass ? this.textures.ground : this.textures.block;
 
-        const cellSprite = this.cellSprites.get(key);
-        if (!data.cell) {
-          if (cellSprite) {
-            this.cellContainer.removeChild(cellSprite);
-            cellSprite.destroy();
-            this.cellSprites.delete(key);
-          }
-          continue;
-        }
-
-        let sprite = cellSprite;
-        if (!sprite) {
-          sprite = new Sprite();
-          sprite.scale.set(IMG_SCALE);
-          sprite.x = xg * config.mapGridSize;
-          sprite.y = yg * config.mapGridSize;
-          this.cellContainer.addChild(sprite);
-          this.cellSprites.set(key, sprite);
-        }
-        sprite.texture = this.textureForCell(data.cell);
+    const cellSprite = this.cellSprites.get(key);
+    if (!data.cell) {
+      if (cellSprite) {
+        this.cellContainer.removeChild(cellSprite);
+        cellSprite.destroy();
+        this.cellSprites.delete(key);
+        this.portalCellKeys.delete(key);
       }
+      return;
+    }
+
+    let sprite = cellSprite;
+    if (!sprite) {
+      sprite = new Sprite();
+      sprite.scale.set(IMG_SCALE);
+      sprite.x = xg * config.mapGridSize;
+      sprite.y = yg * config.mapGridSize;
+      this.cellContainer.addChild(sprite);
+      this.cellSprites.set(key, sprite);
+    }
+    sprite.texture = this.textureForCell(data.cell);
+    if (data.cell.type === 'portal') this.portalCellKeys.add(key);
+    else this.portalCellKeys.delete(key);
+  }
+
+  /** Ground/cell tiles are placed rarely (map setup, occasional painting/corpse-dropping)
+   * relative to how often a frame renders, so redoing all ~1600+ cells every frame was pure
+   * waste. The first call still does a full pass (see `firstCellSync`'s doc comment); every call
+   * after only touches cells `WorldGrid.takeDirty()` reports as actually changed. */
+  private syncGroundAndCells(): void {
+    const { grid } = this.sim;
+    if (this.firstCellSync) {
+      this.firstCellSync = false;
+      for (let xg = grid.minXg; xg <= grid.maxXg; xg++) {
+        for (let yg = grid.minYg; yg <= grid.maxYg; yg++) {
+          this.syncCellAt(xg, yg);
+        }
+      }
+      return;
+    }
+    for (const key of grid.takeDirty()) {
+      const [xg, yg] = key.split(',').map(Number);
+      this.syncCellAt(xg, yg);
+    }
+  }
+
+  /** Portals animate continuously (see `textureForCell`'s portal branch) even though they're
+   * placed rarely — dirty-tracking alone would freeze a portal's texture on whichever frame it
+   * was last marked dirty. `portalCellKeys` is typically empty or tiny, so retexturing just these
+   * every frame is negligible next to the full-grid scan this replaces. */
+  private syncPortalAnimations(): void {
+    const { grid } = this.sim;
+    for (const key of this.portalCellKeys) {
+      const [xg, yg] = key.split(',').map(Number);
+      const sprite = this.cellSprites.get(key);
+      const data = grid.get(xg, yg);
+      if (sprite && data.cell) sprite.texture = this.textureForCell(data.cell);
     }
   }
 
@@ -255,7 +320,10 @@ export class SimulationRenderer {
             dirY = dy / len;
           }
 
-          const saturation = isDiffusion ? config.diffusionSourceStrength : config.pheromoneSaturation;
+          // diffusion's own normalization reference is deliberately much smaller than the other
+          // algorithms' — see `SimConfig.diffusionArrowSaturation`'s doc comment for why a
+          // diffused field's typical away-from-source value is nowhere near its pinned peak.
+          const saturation = isDiffusion ? config.diffusionArrowSaturation : config.pheromoneSaturation;
           const raw = Math.min(1, magnitude / saturation);
           const intensity = raw * raw; // steeper falloff so weak/ambient signal stays faint
           if (intensity < 0.03) continue;
@@ -292,6 +360,7 @@ export class SimulationRenderer {
     this.worldContainer.scale.set(s);
 
     this.syncGroundAndCells();
+    this.syncPortalAnimations();
     this.syncAnts();
     this.syncPheromoneOverlay();
   }
